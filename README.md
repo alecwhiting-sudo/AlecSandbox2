@@ -12,6 +12,19 @@ npm test
 node scripts/render.mjs --from 112 --bars 16 --stems --out out/drop.wav   # render a slice
 ```
 
+## Using it
+
+- **Play** (or Space), click a section name to jump there, tick **Loop section** to stay on one.
+- **Energy map**: tracks × sections. Drag a cell up/down to set how busy, loud and open
+  that part is; double-click to switch it on/off; click to edit it below.
+- **Curves** over the song: Energy, Swing, Filter, Wash, Glitch. Drag, click to add, double-click to remove.
+- **Perform** pad: up = more energy, right = busier, live while playing. Tick *Record energy*
+  to write it into the song.
+- **Part editor**: click to add/remove hits, Shift-click for strength; chords per section.
+- **Ask box**: plain English ("toms busier in the build, darker pads in the drop"). In the
+  claude.ai version this uses Claude; elsewhere a simple built-in parser.
+- **Export master + stems**: 24-bit WAVs (master, 9 tracks, delay and reverb returns).
+
 ## Layout
 
 ```
