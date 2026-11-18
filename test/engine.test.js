@@ -1,0 +1,79 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { buildSong, autoRank } from '../src/song/song.js';
+import { Engine, curveAt, sectionAt, chordAt, songBars } from '../src/engine/engine.js';
+
+const SR = 24000;
+const render = (song, from, bars) => {
+  const e = new Engine(song, SR); e.seek(from);
+  const n = Math.round(bars * 16 * e.stepLen);
+  const L = new Float32Array(n), R = new Float32Array(n);
+  e.render(L, R, n);
+  return { L, R, e };
+};
+
+test('the song is 212 bars at 130 BPM in F minor (about 6:31)', () => {
+  const s = buildSong();
+  assert.equal(s.bpm, 130); assert.equal(s.key, 'F'); assert.equal(s.scale, 'minor');
+  assert.equal(songBars(s), 212);
+  const secs = (212 * 4 * 60) / 130;
+  assert.ok(secs > 385 && secs < 400, `${secs}s`);
+  assert.equal(s.tracks.length, 9);
+});
+
+test('curves, sections and chords resolve', () => {
+  const s = buildSong();
+  assert.equal(curveAt([[0, 0], [10, 1]], 5), 0.5);
+  assert.equal(sectionAt(s, 0).section.id, 'intro');
+  assert.equal(sectionAt(s, 112).section.id, 'drop');
+  assert.equal(sectionAt(s, 211).section.id, 'outro');
+  assert.equal(chordAt(s, 'groove', 2).name, 'Fm(b9)');
+  assert.equal(chordAt(s, 'drop', 5).name, 'Dbmaj7#11');
+});
+
+test('every section renders finite audio under the limiter ceiling', () => {
+  const s = buildSong();
+  for (const from of [0, 64, 96, 112, 144, 200]) {
+    const { L, R } = render(s, from, 2);
+    let pk = 0;
+    for (let i = 0; i < L.length; i++) { assert.ok(Number.isFinite(L[i]) && Number.isFinite(R[i])); pk = Math.max(pk, Math.abs(L[i]), Math.abs(R[i])); }
+    assert.ok(pk > 0.05 && pk < 0.95, `bar ${from}: peak ${pk}`);
+  }
+});
+
+test('rendering is deterministic', () => {
+  const s = buildSong();
+  const a = render(s, 64, 1).L, b = render(s, 64, 1).L;
+  assert.deepEqual(Array.from(a.slice(0, 5000)), Array.from(b.slice(0, 5000)));
+});
+
+test('density cuts low-priority hits first', () => {
+  assert.ok(autoRank(0, 1) < autoRank(8, 1));
+  assert.ok(autoRank(8, 1) < autoRank(2, 1));
+  assert.ok(autoRank(2, 1) < autoRank(3, 1));
+  const s = buildSong();
+  const count = (dens) => {
+    const e = new Engine(s, SR); e.perf.density = dens; e.seek(144);
+    let hits = 0;
+    const fire = e.fire.bind(e);
+    e.fire = (ev) => { if (e.tracks[ev.ti].id === 'perc') hits++; fire(ev); };
+    const n = Math.round(4 * 16 * e.stepLen);
+    e.render(new Float32Array(n), new Float32Array(n), n);
+    return hits;
+  };
+  assert.ok(count(-0.6) < count(0));
+});
+
+test('the kick ducks the pads (sidechain)', () => {
+  const s = buildSong();
+  const e = new Engine(s, SR); e.seek(113);
+  const n = Math.round(4 * 16 * e.stepLen);
+  const pads = [new Float32Array(n), new Float32Array(n)];
+  e.render(new Float32Array(n), new Float32Array(n), n, 0, { pads });
+  // Bar 3, beat 2 (pads fully faded in): right after the kick vs just before it.
+  const beat = Math.round((2 * 16 + 4) * e.stepLen);
+  const rms = (a, b) => { let x = 0; for (let i = a; i < b; i++) x += pads[0][i] ** 2; return Math.sqrt(x / (b - a)); };
+  const after = rms(beat + 20, beat + Math.round(0.03 * SR));
+  const before = rms(beat - Math.round(0.06 * SR), beat - 20);
+  assert.ok(after < before * 0.6, `after ${after} before ${before}`);
+});
