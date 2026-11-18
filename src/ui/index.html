@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>One Song</title>
+  <meta name="description" content="A one-off instrument for making one Detroit techno track: 130 BPM, F minor, all synthesised.">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>One Song</h1>
+      <span class="sub" id="song-meta">130 BPM · F minor · 212 bars</span>
+    </div>
+    <div class="transport">
+      <button id="btn-play" class="btn primary" title="Play / stop (Space)">▶ Play</button>
+      <button id="btn-rewind" class="btn" title="Back to the start">⏮</button>
+      <span class="pos"><span id="pos-bar">1.1</span> <span class="sub" id="pos-sec">Intro</span> <span class="sub" id="pos-time">0:00</span></span>
+      <label class="toggle" title="Loop the section under the playhead"><input type="checkbox" id="loop"> Loop section</label>
+      <span id="gr" class="meter" title="Limiter gain reduction"><span></span></span>
+    </div>
+    <div class="actions">
+      <button id="btn-undo" class="btn small" title="Undo (Ctrl/Cmd+Z)">Undo</button>
+      <button id="btn-redo" class="btn small" title="Redo (Shift+Ctrl/Cmd+Z)">Redo</button>
+      <button id="btn-export" class="btn small">Export master + stems</button>
+      <button id="btn-menu" class="btn small" aria-haspopup="true">Song ▾</button>
+      <div id="menu" class="menu" hidden>
+        <button data-act="save">Save song file</button>
+        <label class="menu-file">Load song file<input type="file" id="file-load" accept=".json" hidden></label>
+        <button data-act="reset">Reset to the original song</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="ask">
+    <form id="ask-form" class="ask-row">
+      <input id="ask-input" type="text" autocomplete="off" placeholder="Tell it what to change: “toms busier in the build”, “darker pads in the drop”, “58% swing on hats from the groove”">
+      <button class="btn primary" id="ask-go">Change</button>
+    </form>
+    <div id="ask-result" class="ask-result" hidden></div>
+  </section>
+
+  <main class="layout">
+    <section class="panel timeline">
+      <div class="panel-head">
+        <h2>Song</h2>
+        <div class="seg" id="curve-tabs" role="group" aria-label="Curve to edit"></div>
+        <span class="sub">Drag cells up/down for energy · click to edit · double-click to switch a part on/off</span>
+      </div>
+      <div class="tl" id="tl">
+        <div class="tl-labels" id="tl-labels"></div>
+        <div class="tl-body" id="tl-body">
+          <div class="ruler" id="ruler"></div>
+          <canvas id="curve" class="curve" height="110"></canvas>
+          <div class="map" id="map"></div>
+          <div class="playhead" id="playhead"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel perf">
+      <div class="panel-head"><h2>Perform</h2><button id="perf-reset" class="btn small">Centre</button></div>
+      <canvas id="xy" class="xy" width="240" height="240" aria-label="Energy (up) and density (right) pad"></canvas>
+      <div class="xy-legend sub"><span>← sparser</span><span>busier →</span></div>
+      <div id="perf-sliders" class="grid2"></div>
+      <label class="toggle"><input type="checkbox" id="perf-record"> Record energy into the song while playing</label>
+    </aside>
+
+    <section class="panel editor">
+      <div class="panel-head"><h2 id="ed-title">Part</h2><div id="ed-tools" class="row gap"></div></div>
+      <div id="ed-body"></div>
+    </section>
+
+    <section class="panel params">
+      <div class="panel-head"><h2 id="pa-title">Track</h2></div>
+      <div id="pa-body" class="grid2"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

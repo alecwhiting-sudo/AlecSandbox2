@@ -224,7 +224,7 @@ export class Engine {
     for (let i = 0; i < n; i++) {
       if (!this.playing || this.pos >= this.totalSamples) { outL[offset + i] = 0; outR[offset + i] = 0; continue; }
       const step = Math.floor(this.pos / this.stepLen);
-      if (step !== this.step) { this.step = step; this.onStep(step); }
+      if (step !== this.step) { this.step = step; if (step < this.totalBars * STEPS_PER_BAR) this.onStep(step); }
       if (this.queue.length) {
         for (let q = 0; q < this.queue.length; q++) {
           if (this.queue[q].at <= this.pos) { this.fire(this.queue[q]); this.queue.splice(q, 1); q--; }

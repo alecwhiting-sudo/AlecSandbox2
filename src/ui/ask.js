@@ -1,0 +1,265 @@
+// Natural-language edits. "toms busier in the build" -> a list of concrete
+// edit operations, previewed, then applied as one undoable change.
+//
+// Inside a claude.ai artifact the page asks Claude (the `sample` capability,
+// on the viewer's own account, no API key). Anywhere else a small built-in
+// parser handles the common phrasing.
+
+import { CHORDS } from '../song/song.js';
+import { autoRank } from '../song/song.js';
+import { PRESETS, presetPatch } from '../stab/presets.js';
+
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const MIX_KEYS = { gain: [-30, 6], pan: [-1, 1], lp: [200, 19000], hp: [15, 2000], drive: [0, 1], delay: [0, 1], reverb: [0, 1], duck: [0, 1], duckRelease: [0.03, 0.6], filterFollow: [0, 1] };
+const MASTER_KEYS = { glue: [0, 1], pump: [0, 0.8], pumpRelease: [0.05, 0.5], delayFeedback: [0, 0.9], delayGrit: [0, 1], reverbDecay: [0.5, 12], gainDb: [-12, 6] };
+const CURVE_RANGE = { energy: [0, 1.2], swing: [0.5, 0.75], filter: [0, 1.2], wet: [0, 2], glitch: [0, 1] };
+
+// ---------------------------------------------------------------- applying ops
+function sectionStart(song, id) {
+  let b = 0;
+  for (const s of song.sections) { if (s.id === id) return b; b += s.bars; }
+  return null;
+}
+function trackOf(song, id) { return song.tracks.find((t) => t.id === id); }
+
+/**
+ * Apply edit ops to the song in place. Returns human-readable lines for what
+ * changed; unknown or invalid ops are skipped and reported.
+ */
+export function applyOps(song, ops) {
+  const done = [];
+  const skip = (o, why) => done.push(`Skipped ${o.op ?? '?'}: ${why}`);
+  for (const o of ops ?? []) {
+    try {
+      switch (o.op) {
+        case 'energy': {
+          const secs = o.section === 'all' ? song.sections.map((s) => s.id) : [o.section];
+          for (const sid of secs) {
+            const cell = song.arrangement[o.track]?.[sid];
+            if (!cell) { skip(o, `${o.track} is off in ${sid}`); continue; }
+            const v = o.value != null ? Number(o.value) : cell.energy + Number(o.delta ?? 0);
+            cell.energy = Math.round(clamp(v, 0, 1.2) * 100) / 100;
+            done.push(`${trackOf(song, o.track)?.name} energy in ${sid}: ${Math.round(cell.energy * 100)}%`);
+          }
+          break;
+        }
+        case 'part': {
+          if (!song.arrangement[o.track] || sectionStart(song, o.section) == null) { skip(o, 'unknown track or section'); break; }
+          if (o.part == null || o.part === 'off') { song.arrangement[o.track][o.section] = null; done.push(`${o.track} off in ${o.section}`); break; }
+          if (!song.parts[o.track]?.[o.part]) { skip(o, `no part ${o.part} for ${o.track}`); break; }
+          const cur = song.arrangement[o.track][o.section];
+          song.arrangement[o.track][o.section] = { part: o.part, energy: cur?.energy ?? Number(o.energy ?? 0.7) };
+          done.push(`${o.track} plays part ${o.part} in ${o.section}`);
+          break;
+        }
+        case 'mix': {
+          const t = trackOf(song, o.track); const r = MIX_KEYS[o.key];
+          if (!t || !r) { skip(o, 'unknown track or setting'); break; }
+          const cur = t.mix[o.key] ?? (o.key === 'filterFollow' ? 1 : 0);
+          let v = o.value != null ? Number(o.value) : o.factor != null ? cur * Number(o.factor) : cur + Number(o.delta ?? 0);
+          t.mix[o.key] = Math.round(clamp(v, r[0], r[1]) * 1000) / 1000;
+          done.push(`${t.name} ${o.key}: ${t.mix[o.key]}`);
+          break;
+        }
+        case 'param': {
+          const t = trackOf(song, o.track);
+          if (!t || typeof t.params[o.key] !== 'number') { skip(o, 'unknown sound setting'); break; }
+          t.params[o.key] = Number(o.value);
+          done.push(`${t.name} sound ${o.key}: ${t.params[o.key]}`);
+          break;
+        }
+        case 'sound': {
+          const t = trackOf(song, o.track);
+          if (!t || t.instrument !== 'poly' || !PRESETS.some((p) => p.id === o.preset)) { skip(o, 'unknown track or sound'); break; }
+          t.params.patch = presetPatch(o.preset); t.params.preset = o.preset;
+          done.push(`${t.name} sound: ${PRESETS.find((p) => p.id === o.preset).name}`);
+          break;
+        }
+        case 'master': {
+          const r = MASTER_KEYS[o.key];
+          if (!r) { skip(o, 'unknown master setting'); break; }
+          song.master[o.key] = Math.round(clamp(Number(o.value), r[0], r[1]) * 1000) / 1000;
+          done.push(`Master ${o.key}: ${song.master[o.key]}`);
+          break;
+        }
+        case 'curve': {
+          const r = CURVE_RANGE[o.curve];
+          if (!r) { skip(o, 'unknown curve'); break; }
+          const from = Math.round(Number(o.from ?? 0)), to = Math.round(Number(o.to ?? from));
+          const v = Math.round(clamp(Number(o.value), r[0], r[1]) * 100) / 100;
+          const pts = song.curves[o.curve].filter(([b]) => b < from || b > to);
+          pts.push([from, v]); if (to !== from) pts.push([to, v]);
+          pts.sort((a, b) => a[0] - b[0]);
+          song.curves[o.curve] = pts;
+          done.push(`${o.curve} ${v} from bar ${from + 1} to ${to + 1}`);
+          break;
+        }
+        case 'chords': {
+          if (sectionStart(song, o.section) == null) { skip(o, 'unknown section'); break; }
+          const list = (o.chords ?? []).filter((c) => CHORDS[c.name]).map((c) => ({ bars: clamp(Math.round(Number(c.bars) || 4), 1, 16), name: c.name, notes: [...CHORDS[c.name]] }));
+          if (!list.length) { skip(o, 'no valid chords'); break; }
+          song.chords[o.section] = list;
+          done.push(`Chords in ${o.section}: ${list.map((c) => `${c.name} (${c.bars})`).join(', ')}`);
+          break;
+        }
+        case 'notes': {
+          const part = song.parts[o.track]?.[o.part];
+          if (!part || part.follow) { skip(o, 'no editable part'); break; }
+          if (o.clear) part.events = [];
+          for (const r of o.remove ?? []) part.events = part.events.filter((e) => !(e.s === r.s && (r.n === undefined || e.n === r.n)));
+          for (const a of o.add ?? []) {
+            const s = Math.round(Number(a.s));
+            if (!(s >= 0 && s < part.len)) continue;
+            const v = clamp(Number(a.v ?? 0.75), 0.1, 1);
+            part.events.push({ s, n: a.n, v, l: clamp(Math.round(Number(a.l ?? 1)), 1, part.len), p: clamp(Number(a.p ?? 1), 0, 1), r: autoRank(s, v) });
+          }
+          part.events.sort((a, b) => a.s - b.s);
+          done.push(`${o.track} part ${o.part}: ${part.events.length} hits`);
+          break;
+        }
+        default: skip(o, 'unknown operation');
+      }
+    } catch (err) { skip(o, err.message); }
+  }
+  return done;
+}
+
+// ---------------------------------------------------------------- prompt
+function songSummary(song) {
+  let start = 0;
+  return {
+    bpm: song.bpm, key: `${song.key} ${song.scale}`,
+    sections: song.sections.map((s) => { const r = { id: s.id, startBar: start, bars: s.bars }; start += s.bars; return r; }),
+    tracks: song.tracks.map((t) => ({ id: t.id, name: t.name, instrument: t.instrument, mix: t.mix, params: Object.fromEntries(Object.entries(t.params).filter(([, v]) => typeof v !== 'object')) })),
+    arrangement: song.arrangement,
+    parts: Object.fromEntries(Object.entries(song.parts).map(([tid, ps]) => [tid, Object.fromEntries(Object.entries(ps).map(([pid, p]) => [pid, p.follow ? { follow: p.follow } : { len: p.len, events: p.events.map((e) => [e.s, e.n, Math.round(e.v * 100) / 100, e.l ?? 1]) }]))])),
+    chords: Object.fromEntries(Object.entries(song.chords).map(([k, v]) => [k, v.map((c) => [c.name, c.bars])])),
+    curves: song.curves, master: song.master,
+  };
+}
+
+const RULES = `You edit one techno track: old-school minimal Detroit, 130 BPM, F minor, Swedish pump.
+Turn the producer's request into edit operations on the song below. Reply with ONLY JSON:
+{"summary": "one short sentence of what you changed", "ops": [ ... ]}
+
+Operations (use only these; track/section/part ids exactly as in the song):
+- {"op":"energy","track":ID,"section":ID|"all","value":0..1.2} or "delta" instead of "value". Cell energy sets how busy (density), loud and open a part is. Busier/sparser = energy.
+- {"op":"part","track":ID,"section":ID,"part":PART_ID|null}  switch a part, or null = silent there.
+- {"op":"mix","track":ID,"key":K,"value":N} (or "delta", or "factor" to multiply). K: gain(dB -30..6), pan(-1..1), lp(Hz, darker=lower), hp(Hz), drive(0..1), delay(0..1 send), reverb(0..1 send), duck(0..1 sidechain depth), duckRelease(s), filterFollow(0..1).
+- {"op":"param","track":ID,"key":K,"value":N}  numeric sound params shown in tracks[].params.
+- {"op":"sound","track":"stabs"|"pads"|"lead","preset":PRESET_ID}
+- {"op":"master","key":K,"value":N}  K: glue, pump, pumpRelease, delayFeedback, delayGrit, reverbDecay, gainDb.
+- {"op":"curve","curve":"energy"|"swing"|"filter"|"wet"|"glitch","from":BAR,"to":BAR,"value":N}  bars are 0-based song bars (see sections' startBar). swing 0.5 straight..0.75 heavy; wet scales delay+reverb (1 normal).
+- {"op":"chords","section":ID,"chords":[{"name":CHORD,"bars":N},...]}
+- {"op":"notes","track":ID,"part":PART_ID,"add":[{"s":STEP,"n":NOTE,"v":0..1,"l":LEN}],"remove":[{"s":STEP,"n":NOTE}],"clear":false}
+  Steps are 16ths from the part start (0..len-1). Notes per track: kick n=null; toms 36 C2,39 Eb2,41 F2,44 Ab2; sub "R" (chord root); hats 0 closed,1 open,2 pedal; perc 0 clap,1 rim,2 shaker,3 conga,4 bell,5 glitch,6 snare; stabs "C" (current chord); lead MIDI 55..84 in F minor (F G Ab Bb C Db Eb, Gb as a b9 rub); fx 0 riser,1 downlifter,2 wash,3 stutter.
+Prefer small, musical edits. Keep it minor and a little discordant. Don't invent ids.`;
+
+function buildPrompt(song, request) {
+  return `${RULES}
+
+Chord names: ${Object.keys(CHORDS).join(', ')}
+Sound presets: ${PRESETS.map((p) => `${p.id} (${p.name})`).join(', ')}
+
+Song:
+${JSON.stringify(songSummary(song))}
+
+Request: ${request}`;
+}
+
+// ---------------------------------------------------------------- simple fallback parser
+const TRACK_WORDS = { kick: ['kick', 'kicks'], toms: ['tom', 'toms'], sub: ['sub', 'subs', 'sub stab', 'sub stabs', 'bass'], hats: ['hat', 'hats', 'hihat', 'hihats', 'hi-hat', 'hi-hats'], perc: ['perc', 'percussion', 'claps', 'clap', 'rims', 'shaker'], stabs: ['stab', 'stabs', 'chord stabs'], pads: ['pad', 'pads'], lead: ['lead', 'melody', 'melodies'], fx: ['fx', 'noise', 'risers', 'riser', 'glitches'] };
+const SECTION_WORDS = { intro: ['intro'], build: ['build', 'build up', 'buildup'], groove: ['groove'], breakdown: ['breakdown', 'break'], drop: ['drop'], peak: ['peak'], outro: ['outro', 'ending', 'end'] };
+const find = (text, words) => Object.entries(words).filter(([, ws]) => ws.some((w) => new RegExp(`\\b${w}\\b`).test(text))).map(([id]) => id);
+
+/** Tiny rule-based parser for common requests. Returns ops (maybe empty). */
+export function parseSimple(text, song) {
+  // Each comma/semicolon-separated clause is read on its own, so
+  // "hats busier in the build, 60% swing in the groove" keeps them apart.
+  const clauses = text.toLowerCase().split(/[,;]|\bthen\b/).map((c) => c.trim()).filter(Boolean);
+  if (clauses.length > 1) return clauses.flatMap((c) => parseClause(c, song));
+  return parseClause(text.toLowerCase(), song);
+}
+
+function parseClause(t, song) {
+  const tracks = find(t, TRACK_WORDS);
+  let sections = find(t, SECTION_WORDS);
+  if (!sections.length || /\b(everywhere|whole song|all sections)\b/.test(t)) sections = ['all'];
+  const ops = [];
+  const pct = t.match(/(\d{2})\s*%\s*swing|swing\s*(?:to|of|at)?\s*(\d{2})\s*%/);
+  if (pct) {
+    const v = Number(pct[1] ?? pct[2]) / 100;
+    const ranges = sections[0] === 'all' ? [[0, song.sections.reduce((a, s) => a + s.bars, 0)]] : sections.map((sid) => { const st = sectionStart(song, sid); return [st, st + song.sections.find((s) => s.id === sid).bars]; });
+    for (const [from, to] of ranges) ops.push({ op: 'curve', curve: 'swing', from, to, value: v });
+  }
+  for (const tr of tracks) {
+    const secs = sections;
+    if (/\b(busier|more|denser|fuller)\b/.test(t)) secs.forEach((s) => ops.push({ op: 'energy', track: tr, section: s, delta: 0.2 }));
+    if (/\b(sparser|less|thinner|emptier)\b/.test(t)) secs.forEach((s) => ops.push({ op: 'energy', track: tr, section: s, delta: -0.2 }));
+    if (/\b(louder|up)\b/.test(t)) ops.push({ op: 'mix', track: tr, key: 'gain', delta: 3 });
+    if (/\b(quieter|down|softer)\b/.test(t)) ops.push({ op: 'mix', track: tr, key: 'gain', delta: -3 });
+    if (/\b(darker|duller|warmer)\b/.test(t)) ops.push({ op: 'mix', track: tr, key: 'lp', factor: 0.6 });
+    if (/\b(brighter|sharper|crisper)\b/.test(t)) ops.push({ op: 'mix', track: tr, key: 'lp', factor: 1.6 });
+    if (/\b(wetter|washier|dubbier)\b/.test(t)) { ops.push({ op: 'mix', track: tr, key: 'reverb', delta: 0.15 }); ops.push({ op: 'mix', track: tr, key: 'delay', delta: 0.15 }); }
+    if (/\b(drier|dryer)\b/.test(t)) { ops.push({ op: 'mix', track: tr, key: 'reverb', delta: -0.15 }); ops.push({ op: 'mix', track: tr, key: 'delay', delta: -0.15 }); }
+    if (/\b(pump|pumpier|duck)\b/.test(t)) ops.push({ op: 'mix', track: tr, key: 'duck', delta: 0.15 });
+    if (/\b(mute|off|remove|drop out)\b/.test(t) && secs[0] !== 'all') secs.forEach((s) => ops.push({ op: 'part', track: tr, section: s, part: null }));
+  }
+  return ops;
+}
+
+// ---------------------------------------------------------------- UI
+export function setupAsk({ getSong, commit, toast }) {
+  const form = document.querySelector('#ask-form');
+  const input = document.querySelector('#ask-input');
+  const out = document.querySelector('#ask-result');
+  const go = document.querySelector('#ask-go');
+  let sampler = null, ctl = null;
+  const inArtifact = !!(window.claude && typeof window.claude.use === 'function');
+  if (inArtifact) window.claude.use('sample').then((s) => { sampler = s; }).catch(() => {});
+
+  const show = (...nodes) => { out.replaceChildren(...nodes); out.hidden = false; };
+  const p = (text, cls) => { const e = document.createElement('p'); e.style.margin = '0'; if (cls) e.className = cls; e.textContent = text; return e; };
+  const btn = (label, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = `btn small ${cls}`; b.textContent = label; b.onclick = fn; return b; };
+
+  function preview(summary, ops) {
+    // Dry run on a copy to list what would change.
+    const copy = JSON.parse(JSON.stringify(getSong()));
+    const lines = applyOps(copy, ops);
+    if (!lines.length) { show(p("I couldn't turn that into a change. Try naming a track (toms, hats, pads…) and a section (build, drop…).", 'sub')); return; }
+    const ul = document.createElement('ul');
+    for (const l of lines) { const li = document.createElement('li'); li.textContent = l; ul.append(li); }
+    const row = document.createElement('div'); row.className = 'row gap';
+    row.append(
+      btn('Apply', 'primary', () => { commit((s) => applyOps(s, ops)); out.hidden = true; input.value = ''; toast('Applied. Undo is in the top bar.'); }),
+      btn('Discard', '', () => { out.hidden = true; }),
+    );
+    show(p(summary || 'Proposed changes:'), ul, row);
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    if (!sampler) {
+      const ops = parseSimple(text, getSong());
+      preview(ops.length ? 'Proposed changes (simple mode: open this in claude.ai for full language understanding):' : '', ops);
+      return;
+    }
+    ctl?.abort(); ctl = new AbortController();
+    go.disabled = true;
+    show(p('Thinking…', 'sub'), btn('Stop', '', () => ctl.abort()));
+    try {
+      const res = await sampler.json(buildPrompt(getSong(), text), { signal: ctl.signal, cache: false });
+      if (!res || !Array.isArray(res.ops)) throw { code: 'invalid_json' };
+      preview(res.summary, res.ops);
+    } catch (err) {
+      const code = err?.code;
+      if (code === 'cancelled') out.hidden = true;
+      else if (code === 'not_granted' || code === 'sampling_disabled' || code === 'not_declared') { sampler = null; preview('Claude isn’t available here, so using simple mode:', parseSimple(text, getSong())); }
+      else if (code === 'rate_limited') show(p('Too many requests just now. Try again in a minute.', 'sub'));
+      else if (code === 'invalid_json') show(p('The answer came back garbled. Try again, or phrase it more simply.', 'sub'));
+      else show(p('Something went wrong reaching Claude. Try again.', 'sub'));
+    } finally { go.disabled = false; }
+  });
+}
