@@ -3,7 +3,7 @@
 // part editor and track settings.
 
 import { buildSong, TOKENS, CHORDS, autoRank } from '../song/song.js';
-import { curveAt, sectionAt, songBars } from '../engine/engine.js';
+import { Engine, curveAt, sectionAt, songBars } from '../engine/engine.js';
 import { PRESETS, presetPatch } from '../stab/presets.js';
 import { noteName } from '../stab/theory.js';
 import { encodeWav } from '../engine/wav.js';
@@ -70,19 +70,72 @@ export { commit, toast };
 
 // ---------------------------------------------------------------- audio
 let ctx = null, node = null;
+// iPhone/iPad: ask for the media playback channel so the ring/silent switch
+// doesn't mute the song (Safari 16.4+); older iOS gets a silent looping
+// <audio> element, which moves the page into that channel.
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* not supported */ }
+let keepAlive = null;
+function unlockIOS() {
+  if (!isIOS || keepAlive || navigator.audioSession) return;
+  const wav = encodeWav([new Float32Array(4410)], 44100, 16);
+  keepAlive = new Audio(URL.createObjectURL(new Blob([wav], { type: 'audio/wav' })));
+  keepAlive.loop = true; keepAlive.setAttribute('playsinline', '');
+  keepAlive.play().catch(() => { keepAlive = null; });
+}
+
+// Fallback player for browsers where the AudioWorklet can't load: runs the
+// same Engine on the main thread through a ScriptProcessor, with the same
+// message interface as the worklet.
+function mainThreadPlayer(context) {
+  const proc = context.createScriptProcessor(4096, 0, 2);
+  let engine = null, playing = false, loop = null, tick = 0;
+  const port = {
+    onmessage: null,
+    postMessage(m) {
+      if (m.type === 'song') { if (!engine) { engine = new Engine(m.song, context.sampleRate); engine.seek(0); } else engine.update(m.song); }
+      else if (m.type === 'perf' && engine) Object.assign(engine.perf, m.perf);
+      else if (m.type === 'play') playing = true;
+      else if (m.type === 'stop') playing = false;
+      else if (m.type === 'seek' && engine) engine.seek(m.bar);
+      else if (m.type === 'loop') loop = m.loop;
+    },
+  };
+  proc.onaudioprocess = (e) => {
+    const L = e.outputBuffer.getChannelData(0), R = e.outputBuffer.getChannelData(1);
+    if (!engine || !playing) { L.fill(0); R.fill(0); return; }
+    if (loop && engine.bar >= loop.to) engine.seek(loop.from);
+    engine.render(L, R, L.length);
+    if (engine.pos >= engine.totalSamples) { playing = false; port.onmessage?.({ data: { type: 'ended' } }); }
+    if (++tick % 2 === 0) { port.onmessage?.({ data: { type: 'pos', bar: engine.bar, gr: engine.mixer.limiter.gr } }); engine.mixer.limiter.gr = 0; }
+  };
+  return { port, connect: (d) => proc.connect(d) };
+}
+
 async function ensureAudio() {
-  if (node) { if (ctx.state !== 'running') await ctx.resume(); return; }
-  ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
-  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* ignore */ }
-  // eslint-disable-next-line no-undef
-  const url = URL.createObjectURL(new Blob([__WORKLET_SRC__], { type: 'text/javascript' }));
-  await ctx.audioWorklet.addModule(url);
-  node = new AudioWorkletNode(ctx, 'song-processor', { outputChannelCount: [2] });
+  if (node) { if (ctx.state !== 'running') await ctx.resume().catch(() => {}); return; }
+  // Created synchronously inside the tap, which iOS requires. Phones run the
+  // live preview at 32 kHz to save CPU (exports are always 48 kHz).
+  const AC = window.AudioContext || window.webkitAudioContext;
+  try { ctx = new AC(isIOS ? { latencyHint: 'playback', sampleRate: 32000 } : { latencyHint: 'playback' }); }
+  catch { ctx = new AC(); }
+  unlockIOS();
+  if (ctx.state !== 'running') ctx.resume().catch(() => {});
+  try {
+    // eslint-disable-next-line no-undef
+    const url = URL.createObjectURL(new Blob([__WORKLET_SRC__], { type: 'text/javascript' }));
+    await ctx.audioWorklet.addModule(url);
+    node = new AudioWorkletNode(ctx, 'song-processor', { outputChannelCount: [2] });
+  } catch (err) {
+    console.warn('AudioWorklet unavailable, using the fallback player', err);
+    node = mainThreadPlayer(ctx);
+  }
   node.connect(ctx.destination);
   node.port.onmessage = (e) => onEngine(e.data);
   sendSong(); sendPerf();
   node.port.postMessage({ type: 'seek', bar: ui.bar });
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx && ctx.state !== 'running') ctx.resume().catch(() => {}); });
 function sendSong() { node?.port.postMessage({ type: 'song', song }); }
 let perfPending = false;
 function sendPerf() {
@@ -91,7 +144,8 @@ function sendPerf() {
   requestAnimationFrame(() => { perfPending = false; node?.port.postMessage({ type: 'perf', perf }); });
 }
 async function togglePlay() {
-  await ensureAudio();
+  try { await ensureAudio(); }
+  catch (err) { toast(`Couldn't start audio: ${err?.message ?? err}`); return; }
   ui.playing = !ui.playing;
   node.port.postMessage({ type: ui.playing ? 'play' : 'stop' });
   $('#btn-play').textContent = ui.playing ? '■ Stop' : '▶ Play';
