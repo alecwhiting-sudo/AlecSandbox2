@@ -77,3 +77,19 @@ test('the kick ducks the pads (sidechain)', () => {
   const before = rms(beat - Math.round(0.06 * SR), beat - 20);
   assert.ok(after < before * 0.6, `after ${after} before ${before}`);
 });
+
+test('solo: only soloed tracks are heard', () => {
+  const s = buildSong();
+  const level = (perf) => {
+    const e = new Engine(s, SR); Object.assign(e.perf, perf); e.seek(113);
+    const n = Math.round(16 * e.stepLen);
+    const st = Object.fromEntries(s.tracks.map((t) => [t.id, [new Float32Array(n), new Float32Array(n)]]));
+    e.render(new Float32Array(n), new Float32Array(n), n, 0, st);
+    return Object.fromEntries(Object.entries(st).map(([id, [l]]) => [id, l.reduce((a, v) => a + v * v, 0)]));
+  };
+  const all = level({});
+  const soloed = level({ solo: { toms: true, pads: true } });
+  assert.ok(all.kick > 0 && all.hats > 0);
+  assert.ok(soloed.toms > 0 && soloed.pads > 0);
+  for (const id of ['kick', 'hats', 'perc', 'sub', 'stabs', 'lead']) assert.equal(soloed[id], 0, id);
+});

@@ -78,7 +78,7 @@ export class Engine {
   constructor(song, sr = 48000) {
     this.sr = sr;
     this.rng = new Rng('one-song');
-    this.perf = { energy: 0, density: 0, swing: 0, filter: 0, wash: 0, mute: {} };
+    this.perf = { energy: 0, density: 0, swing: 0, filter: 0, wash: 0, mute: {}, solo: {} };
     this.load(song);
     this.pos = 0;        // samples since bar 0
     this.step = -1;      // last step processed
@@ -142,6 +142,9 @@ export class Engine {
     this.wet = clamp(curveAt(song.curves.wet, bar) + this.perf.wash, 0, 2);
     const glitch = clamp(curveAt(song.curves.glitch, bar), 0, 1);
     const stepStart = Math.round(stepIndex * this.stepLen);
+    // Solo: when any track is soloed, only soloed tracks are heard.
+    const solo = this.perf.solo ?? {};
+    const anySolo = Object.values(solo).some(Boolean);
 
     for (let ti = 0; ti < this.tracks.length; ti++) {
       const track = this.tracks[ti];
@@ -150,7 +153,8 @@ export class Engine {
       // Channel settings from energy: level, filter opening, sends.
       const e = clamp(cellE * (0.55 + 0.45 * eg), 0, 1.2);
       const live = this.live[ti];
-      live.gain = cell && !this.perf.mute[track.id] ? dbToGain(mix.gain + (e - 1) * 6) : 0;
+      const audible = !this.perf.mute[track.id] && (!anySolo || solo[track.id]);
+      live.gain = cell && audible ? dbToGain(mix.gain + (e - 1) * 6) : 0;
       live.pan = mix.pan ?? 0;
       // How much the low-pass follows energy and the song filter curve (hats barely, pads fully).
       const ff = mix.filterFollow ?? 1;

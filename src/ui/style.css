@@ -78,12 +78,15 @@ input[type="number"] { background: var(--inset); border: 1px solid var(--line-li
 .seg button.on { background: var(--accent); color: #fff; font-weight: 700; }
 
 /* timeline: labels column + body (ruler, curve, map rows) */
-.tl { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 0 8px; }
+.tl { display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 0 8px; }
 .tl-labels { display: flex; flex-direction: column; padding-top: 132px; gap: 3px; }
 .tl-labels .lab { height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: 12px; color: var(--label); cursor: pointer; padding: 0 4px; border-radius: var(--radius); }
 .tl-labels .lab.sel { background: var(--accent-soft); color: var(--text); }
 .tl-labels .lab .mute { font-size: 10px; color: var(--muted); border: 1px solid var(--line-light); border-radius: 3px; padding: 0 4px; background: none; cursor: pointer; }
 .tl-labels .lab .mute.on { color: var(--accent); border-color: var(--accent); }
+.tl-labels .lab .ms { display: inline-flex; gap: 3px; flex: none; }
+.tl-labels .lab .solo.on { color: #111; background: var(--cool); border-color: var(--cool); }
+.tl-labels .lab > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .tl-body { position: relative; min-width: 0; }
 .ruler { position: relative; height: 18px; display: flex; cursor: pointer; }
 .ruler div { border-left: 1px solid var(--line-light); font-size: 11px; color: var(--muted); padding-left: 4px; overflow: hidden; white-space: nowrap; }
@@ -118,7 +121,7 @@ input[type="number"] { background: var(--inset); border: 1px solid var(--line-li
   .perf .xy { max-width: 320px; }
 }
 @media (max-width: 600px) {
-  .tl { grid-template-columns: 64px minmax(0, 1fr); }
+  .tl { grid-template-columns: 92px minmax(0, 1fr); }
   .tl-labels .lab { font-size: 11px; }
   .grid2 { grid-template-columns: 1fr; }
 }

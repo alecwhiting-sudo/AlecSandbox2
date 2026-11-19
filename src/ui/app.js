@@ -28,7 +28,7 @@ const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n
 const STORE = 'onesong.song.v1';
 let song = loadSaved() ?? buildSong();
 const ui = { track: 'toms', section: 'groove', master: false, curve: 'energy', bar: 0, playing: false };
-const perf = { energy: 0, density: 0, swing: 0, filter: 0, wash: 0, mute: {} };
+const perf = { energy: 0, density: 0, swing: 0, filter: 0, wash: 0, mute: {}, solo: {} };
 const undoStack = [], redoStack = [];
 const lastPart = {}; // remembers a cell's part when switched off
 
@@ -210,7 +210,14 @@ function renderRuler() {
 function renderLabels() {
   const rows = song.tracks.map((t) => el('div', { class: `lab${!ui.master && ui.track === t.id ? ' sel' : ''}`, onclick: () => { ui.master = false; ui.track = t.id; renderAll(); } },
     el('span', {}, t.name),
-    el('button', { class: `mute${perf.mute[t.id] ? ' on' : ''}`, title: 'Mute while playing', onclick: (e) => { e.stopPropagation(); perf.mute[t.id] = !perf.mute[t.id]; sendPerf(); renderLabels(); } }, 'M')));
+    el('span', { class: 'ms' },
+      el('button', { class: `mute${perf.mute[t.id] ? ' on' : ''}`, title: `Mute ${t.name}`, 'aria-pressed': String(!!perf.mute[t.id]), onclick: (e) => { e.stopPropagation(); perf.mute[t.id] = !perf.mute[t.id]; sendPerf(); renderLabels(); } }, 'M'),
+      el('button', { class: `mute solo${perf.solo[t.id] ? ' on' : ''}`, title: `Solo ${t.name} (Alt-click: only this one)`, 'aria-pressed': String(!!perf.solo[t.id]), onclick: (e) => {
+        e.stopPropagation();
+        const on = !perf.solo[t.id];
+        if (e.altKey) for (const k of Object.keys(perf.solo)) perf.solo[k] = false;
+        perf.solo[t.id] = on; sendPerf(); renderLabels();
+      } }, 'S'))));
   rows.push(el('div', { class: `lab${ui.master ? ' sel' : ''}`, onclick: () => { ui.master = true; renderAll(); } }, el('span', {}, 'Master')));
   $('#tl-labels').replaceChildren(...rows);
 }

@@ -15,6 +15,7 @@ node scripts/render.mjs --from 112 --bars 16 --stems --out out/drop.wav   # rend
 ## Using it
 
 - **Play** (or Space), click a section name to jump there, tick **Loop section** to stay on one.
+- **M / S** next to each track: mute, solo (several can be soloed; Alt-click solos just that one).
 - **Energy map**: tracks × sections. Drag a cell up/down to set how busy, loud and open
   that part is; double-click to switch it on/off; click to edit it below.
 - **Curves** over the song: Energy, Swing, Filter, Wash, Glitch. Drag, click to add, double-click to remove.
