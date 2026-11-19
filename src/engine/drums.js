@@ -157,7 +157,9 @@ class PercVoice {
     const set = (fc, q) => this.f.set(prewarp(fc, sr), 1 / q);
     switch (kind) {
       case 0: set(1200 * (p.clapTone ?? 1), 1.4); this.k = expK(0.16, sr); break;            // clap
-      case 1: set(1700, 9); this.k = expK(0.03, sr); break;                                    // rim
+      // rim: a dry stick-on-rim crack. Broad noise band (low Q, no ring) plus a
+      // knock that dies in a few ms, so it has impact but almost no pitch.
+      case 1: set(3200 * (p.rimTone ?? 1), 0.7); this.k = expK(0.011, sr); this.pk = expK(0.004, sr); this.pe = 1; break;
       case 2: set(9000, 1); this.k = expK(0.05, sr); break;                                    // shaker
       case 3: this.k = expK(0.16, sr); this.pk = expK(0.03, sr); this.pe = 1; break;           // conga
       case 4: set(2400, 3); this.k = expK(0.09, sr); break;                                    // bell
@@ -175,7 +177,13 @@ class PercVoice {
         const burst = ms < 22 ? (Math.floor(ms / 7.5) < 3 && (ms % 7.5) < 3 ? 1 : 0.15) : 1;
         this.f.tick(rng.bipolar()); y = this.f.band * burst * 2.2; break;
       }
-      case 1: this.f.tick(this.t < 30 ? rng.bipolar() : 0); y = this.f.band * 3; break;
+      case 1: {
+        this.ph += 300 / sr; if (this.ph >= 1) this.ph -= 1;
+        const crack = this.t < sr * 0.0015 ? 1 : 0.4;   // sharp front edge
+        this.f.tick(rng.bipolar() * crack);
+        y = this.f.band * 2.2 + Math.sin(TWO_PI * this.ph) * this.pe * 0.4;
+        this.pe *= this.pk; break;
+      }
       case 2: this.f.tick(rng.bipolar()); y = this.hp.process(this.f.band) * 1.2; break;
       case 3: {
         this.ph += 230 * (1 + 0.6 * this.pe) / sr; if (this.ph >= 1) this.ph -= 1;
