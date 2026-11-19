@@ -126,3 +126,5 @@ input[type="number"] { background: var(--inset); border: 1px solid var(--line-li
   .grid2 { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.song-pick { font: inherit; font-size: 13px; font-weight: 650; background: var(--inset); color: inherit; border: 1px solid #3a3a3a; border-radius: 6px; padding: 3px 6px; max-width: min(260px, 60vw); }

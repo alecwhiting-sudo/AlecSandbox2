@@ -202,10 +202,10 @@ REVISIONS.push({
 });
 
 /** Apply revisions the song hasn't had. Returns the summaries applied. */
-export function applyRevisions(song) {
+export function applyRevisions(song, list = REVISIONS) {
   song.revisions = song.revisions ?? [];
   const applied = [];
-  for (const r of REVISIONS) {
+  for (const r of list) {
     if (song.revisions.includes(r.id)) continue;
     if (r.ops) applyOps(song, r.ops);
     if (r.apply) r.apply(song);

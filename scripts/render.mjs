@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Render the song (or a slice) to WAV from the command line, with level stats.
-//   node scripts/render.mjs --from 0 --bars 8 --out out/intro.wav [--stems] [--sr 48000]
+//   node scripts/render.mjs --from 0 --bars 8 --out out/intro.wav [--song undertow] [--stems] [--sr 48000]
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { buildSong } from '../src/song/song.js';
-import { applyRevisions } from '../src/song/revisions.js';
+import { songDef, applySongRevisions } from '../src/song/songs.js';
 import { Engine } from '../src/engine/engine.js';
 import { encodeWav } from '../src/engine/wav.js';
 
@@ -13,8 +12,8 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, arr) =>
   return acc;
 }, []));
 const sr = Number(args.sr ?? 48000);
-const song = buildSong();
-applyRevisions(song);
+const song = songDef(args.song ?? 'one').build();
+applySongRevisions(song);
 const eng = new Engine(song, sr);
 const from = Number(args.from ?? 0);
 const bars = Number(args.bars ?? eng.totalBars - from);

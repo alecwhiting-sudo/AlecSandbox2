@@ -104,7 +104,8 @@ export function applyOps(song, ops) {
         }
         case 'chords': {
           if (sectionStart(song, o.section) == null) { skip(o, 'unknown section'); break; }
-          const list = (o.chords ?? []).filter((c) => CHORDS[c.name]).map((c) => ({ bars: clamp(Math.round(Number(c.bars) || 4), 1, 16), name: c.name, notes: [...CHORDS[c.name]] }));
+          const set = song.chordSet ?? CHORDS;
+          const list = (o.chords ?? []).filter((c) => set[c.name]).map((c) => ({ bars: clamp(Math.round(Number(c.bars) || 4), 1, 16), name: c.name, notes: [...set[c.name]] }));
           if (!list.length) { skip(o, 'no valid chords'); break; }
           song.chords[o.section] = list;
           done.push(`Chords in ${o.section}: ${list.map((c) => `${c.name} (${c.bars})`).join(', ')}`);
@@ -177,7 +178,7 @@ function songSummary(song) {
   };
 }
 
-const RULES = `You edit one techno track: old-school minimal Detroit, 130 BPM, F minor, Swedish pump.
+const rules = (song) => `You edit one techno track: ${song.brief ?? 'old-school minimal Detroit, 130 BPM, F minor, Swedish pump'}.
 Turn the producer's request into edit operations on the song below. Reply with ONLY JSON:
 {"summary": "one short sentence of what you changed", "ops": [ ... ]}
 
@@ -195,13 +196,13 @@ Operations (use only these; track/section/part ids exactly as in the song):
 - {"op":"newpart","track":ID,"part":NEW_ID,"len":STEPS,"tile":EXISTING_PART_ID?,"add":[events]}  create a part (optionally starting as copies of another), then use "part" to place it.
 - {"op":"patch","track":"stabs"|"pads"|"lead","preset":PRESET_ID?,"over":{...Stab Lab patch overrides, e.g. {"filterA":{"cutoff":600,"res":0.6,"env":3}}}}
 - {"op":"notes","track":ID,"part":PART_ID,"add":[{"s":STEP,"n":NOTE,"v":0..1,"l":LEN}],"remove":[{"s":STEP,"n":NOTE}],"clear":false}
-  Steps are 16ths from the part start (0..len-1). Notes per track: kick n=null; toms 36 C2,39 Eb2,41 F2,44 Ab2; sub "R" (chord root); hats 0 closed,1 open,2 pedal; perc 0 clap,1 rim,2 shaker,3 conga,4 bell,5 glitch,6 snare; stabs "C" (current chord); lead MIDI 55..84 in F minor (F G Ab Bb C Db Eb, Gb as a b9 rub); fx 0 riser,1 downlifter,2 wash,3 stutter.
+  Steps are 16ths from the part start (0..len-1). Notes per track: kick n=null; toms ${song.noteHints?.toms ?? '36 C2,39 Eb2,41 F2,44 Ab2'}; sub "R" (chord root); hats 0 closed,1 open,2 pedal; perc 0 clap,1 rim,2 shaker,3 conga,4 snap,5 glitch,6 snare; stabs "C" (current chord); lead ${song.noteHints?.lead ?? 'MIDI 55..84 in F minor (F G Ab Bb C Db Eb, Gb as a b9 rub)'}; fx 0 riser,1 downlifter,2 wash,3 stutter.
 Prefer small, musical edits. Keep it minor and a little discordant. Don't invent ids.`;
 
 function buildPrompt(song, request) {
-  return `${RULES}
+  return `${rules(song)}
 
-Chord names: ${Object.keys(CHORDS).join(', ')}
+Chord names: ${Object.keys(song.chordSet ?? CHORDS).join(', ')}
 Sound presets: ${PRESETS.map((p) => `${p.id} (${p.name})`).join(', ')}
 
 Song:
@@ -211,7 +212,7 @@ Request: ${request}`;
 }
 
 // ---------------------------------------------------------------- simple fallback parser
-const TRACK_WORDS = { kick: ['kick', 'kicks'], toms: ['tom', 'toms'], sub: ['sub', 'subs', 'sub stab', 'sub stabs', 'bass'], hats: ['hat', 'hats', 'hihat', 'hihats', 'hi-hat', 'hi-hats'], perc: ['perc', 'percussion', 'claps', 'clap', 'rims', 'shaker'], stabs: ['stab', 'stabs', 'chord stabs'], pads: ['pad', 'pads'], lead: ['lead', 'melody', 'melodies'], fx: ['fx', 'noise', 'risers', 'riser', 'glitches'] };
+const TRACK_WORDS = { kick: ['kick', 'kicks'], toms: ['tom', 'toms'], sub: ['sub', 'subs', 'sub stab', 'sub stabs', 'bass', 'rumble'], hats: ['hat', 'hats', 'hihat', 'hihats', 'hi-hat', 'hi-hats'], perc: ['perc', 'percussion', 'claps', 'clap', 'rims', 'shaker', 'snap', 'snaps'], stabs: ['stab', 'stabs', 'chord stabs'], pads: ['pad', 'pads'], lead: ['lead', 'melody', 'melodies', 'sequence'], fx: ['fx', 'noise', 'risers', 'riser', 'glitches'] };
 const SECTION_WORDS = { intro: ['intro'], build: ['build', 'build up', 'buildup'], groove: ['groove'], breakdown: ['breakdown', 'break'], drop: ['drop'], peak: ['peak'], outro: ['outro', 'ending', 'end'] };
 const find = (text, words) => Object.entries(words).filter(([, ws]) => ws.some((w) => new RegExp(`\\b${w}\\b`).test(text))).map(([id]) => id);
 
@@ -226,7 +227,10 @@ export function parseSimple(text, song) {
 
 function parseClause(t, song) {
   const tracks = find(t, TRACK_WORDS);
-  let sections = find(t, SECTION_WORDS);
+  // This song's own sections (by id and name), plus the usual synonyms.
+  const words = {};
+  for (const sec of song.sections) words[sec.id] = [...new Set([sec.id, sec.name.toLowerCase(), ...(SECTION_WORDS[sec.id] ?? [])])];
+  let sections = find(t, words);
   if (!sections.length || /\b(everywhere|whole song|all sections)\b/.test(t)) sections = ['all'];
   const ops = [];
   const pct = t.match(/(\d{2})\s*%\s*swing|swing\s*(?:to|of|at)?\s*(\d{2})\s*%/);
@@ -252,7 +256,7 @@ function parseClause(t, song) {
 }
 
 // ---------------------------------------------------------------- UI
-const SIMPLE_HELP = 'Simple mode understands a track (kick, toms, sub, hats, perc, stabs, pads, lead, fx) and a section (intro, build, groove, breakdown, drop, peak, outro) with: busier / sparser, louder / quieter, darker / brighter, wetter / drier, pumpier, mute — and “60% swing in the groove”. Separate several requests with commas.';
+const SIMPLE_HELP = 'Simple mode understands a track (kick, toms, sub, hats, perc, stabs, pads, lead, fx) and a section (by its name on the song map, e.g. intro, drop) with: busier / sparser, louder / quieter, darker / brighter, wetter / drier, pumpier, mute — and “60% swing in the groove”. Separate several requests with commas.';
 
 export function setupAsk({ getSong, commit, toast, undo }) {
   const form = document.querySelector('#ask-form');

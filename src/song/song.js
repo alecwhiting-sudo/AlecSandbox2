@@ -1,4 +1,4 @@
-// THE song. 130 BPM, F minor, ~6:31. Old-school minimal Detroit techno with a
+// The first song. 130 BPM, F minor, ~6:31. Old-school minimal Detroit techno with a
 // Swedish pump, built up to a central washy drop. Everything else in the app
 // edits the JSON this file produces.
 //
@@ -160,8 +160,8 @@ const CURVES = {
 };
 
 // ---------------------------------------------------------------- compile
-export function laneEvents(trackId, part) {
-  const map = TOKENS[trackId] ?? {};
+export function laneEvents(trackId, part, tokens = TOKENS) {
+  const map = tokens[trackId] ?? {};
   const events = [];
   for (const lane of part.lanes ?? []) {
     const steps = lane.replace(/\s+/g, '');
@@ -187,35 +187,53 @@ export function autoRank(s, v) {
   return Math.min(1, Math.round(r * 100) / 100);
 }
 
-/** Build the song JSON (plain data; safe to clone, save and edit). */
-export function buildSong() {
+/**
+ * Compile a song definition into the song JSON (plain data; safe to clone,
+ * save and edit). Shared by every song in src/song/.
+ */
+export function compileSong(def) {
   const parts = {};
-  for (const [tid, ps] of Object.entries(PARTS)) {
+  for (const [tid, ps] of Object.entries(def.parts)) {
     parts[tid] = {};
     for (const [pid, part] of Object.entries(ps)) {
-      const events = [...(part.events ?? []).map((e) => ({ ...e })), ...laneEvents(tid, part)]
+      const events = [...(part.events ?? []).map((e) => ({ ...e })), ...laneEvents(tid, part, def.tokens ?? TOKENS)]
         .map((e) => ({ p: 1, ...e, r: e.r ?? autoRank(e.s, e.v) }))
         .sort((a, b) => a.s - b.s);
       parts[tid][pid] = { len: part.len, follow: part.follow ?? null, events };
+      if (part.fill) { parts[tid][pid].fill = part.fill; parts[tid][pid].fillEvery = part.fillEvery ?? 8; }
     }
   }
   const arrangement = {};
-  for (const [tid, cells] of Object.entries(ARR)) {
+  for (const [tid, cells] of Object.entries(def.arr)) {
     arrangement[tid] = {};
-    SECTIONS.forEach((sec, i) => {
+    def.sections.forEach((sec, i) => {
       const c = cells[i];
       arrangement[tid][sec.id] = c ? { part: c[0], energy: c[1] } : null;
     });
   }
   const chords = {};
-  for (const [sid, prog] of Object.entries(PROG)) chords[sid] = prog.map(([bars, name]) => ({ bars, name, notes: [...CHORDS[name]] }));
-  return {
-    title: 'Untitled Detroit',
-    bpm: 130, key: 'F', scale: 'minor',
-    sections: SECTIONS.map((s) => ({ ...s })),
-    tracks: JSON.parse(JSON.stringify(TRACKS)),
+  for (const [sid, prog] of Object.entries(def.prog)) chords[sid] = prog.map(([bars, name]) => ({ bars, name, notes: [...def.chords[name]] }));
+  const song = {
+    title: def.title,
+    bpm: def.bpm, key: def.key, scale: def.scale,
+    sections: def.sections.map((s) => ({ ...s })),
+    tracks: JSON.parse(JSON.stringify(def.tracks)),
     parts, arrangement, chords,
-    curves: JSON.parse(JSON.stringify(CURVES)),
-    master: { glue: 0.45, pump: 0.22, pumpRelease: 0.16, delayTime: '1/8d', delayFeedback: 0.55, delayGrit: 0.55, reverbDecay: 5.5, ceilingDb: -0.8, gainDb: 0 },
+    curves: JSON.parse(JSON.stringify(def.curves)),
+    master: { ...def.master },
   };
+  // Extra fields only for songs after the first (the first song's saved
+  // copies predate them; the app falls back to the first song's values).
+  if (def.songId) song.songId = def.songId;
+  if (def.extra) Object.assign(song, JSON.parse(JSON.stringify(def.extra)));
+  return song;
+}
+
+/** Build the first song. */
+export function buildSong() {
+  return compileSong({
+    title: 'Untitled Detroit', bpm: 130, key: 'F', scale: 'minor',
+    sections: SECTIONS, tracks: TRACKS, parts: PARTS, arr: ARR, prog: PROG, chords: CHORDS, curves: CURVES,
+    master: { glue: 0.45, pump: 0.22, pumpRelease: 0.16, delayTime: '1/8d', delayFeedback: 0.55, delayGrit: 0.55, reverbDecay: 5.5, ceilingDb: -0.8, gainDb: 0 },
+  });
 }

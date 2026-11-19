@@ -2,13 +2,13 @@
 // (AudioWorklet) on every edit, and draws the energy map, curves, XY pad,
 // part editor and track settings.
 
-import { buildSong, TOKENS, CHORDS, autoRank } from '../song/song.js';
+import { TOKENS, CHORDS, autoRank } from '../song/song.js';
 import { Engine, curveAt, sectionAt, songBars } from '../engine/engine.js';
 import { PRESETS, presetPatch } from '../stab/presets.js';
 import { noteName } from '../stab/theory.js';
 import { encodeWav } from '../engine/wav.js';
 import { setupAsk } from './ask.js';
-import { applyRevisions } from '../song/revisions.js';
+import { SONGS, songDef, songIdOf, applySongRevisions } from '../song/songs.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
@@ -26,24 +26,53 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 // ---------------------------------------------------------------- state
-const STORE = 'onesong.song.v1';
-let song = loadSaved() ?? buildSong();
+// Each song has its own saved copy; the first song keeps its original key.
+const storeKey = (id) => (id === 'one' ? 'onesong.song.v1' : `onesong.song.${id}.v1`);
+const CURRENT = 'onesong.current';
+let songId = (() => { try { return songDef(localStorage.getItem(CURRENT) ?? 'one').id; } catch { return 'one'; } })();
+let song = loadSaved() ?? songDef(songId).build();
 // Bring in song changes made by Claude in chat, keeping your own edits.
 const startUndo = JSON.stringify(song);
-const revised = applyRevisions(song);
-const ui = { track: 'toms', section: 'groove', master: false, curve: 'energy', bar: 0, playing: false };
+const revised = applySongRevisions(song);
+const ui = { track: 'toms', section: song.sections[2]?.id ?? song.sections[0].id, master: false, curve: 'energy', bar: 0, playing: false };
 const perf = { energy: 0, density: 0, swing: 0, filter: 0, wash: 0, mute: {}, solo: {} };
 const undoStack = [], redoStack = [];
 const lastPart = {}; // remembers a cell's part when switched off
 
-function loadSaved() {
-  try { const s = JSON.parse(localStorage.getItem(STORE)); return s && s.sections ? s : null; } catch { return null; }
+function loadSaved(id = songId) {
+  try { const s = JSON.parse(localStorage.getItem(storeKey(id))); return s && s.sections && songIdOf(s) === id ? s : null; } catch { return null; }
 }
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { try { localStorage.setItem(STORE, JSON.stringify(song)); } catch { /* full or blocked */ } }, 400);
+  saveTimer = setTimeout(saveNow, 400);
 }
+function saveNow() {
+  clearTimeout(saveTimer);
+  try { localStorage.setItem(storeKey(songId), JSON.stringify(song)); } catch { /* full or blocked */ }
+}
+
+/** Switch to another song: save this one, stop, load the other in place. */
+function switchSong(id) {
+  if (id === songId) return;
+  saveNow();
+  if (ui.playing) togglePlay();
+  songId = songDef(id).id;
+  try { localStorage.setItem(CURRENT, songId); } catch { /* blocked */ }
+  song = loadSaved() ?? songDef(songId).build();
+  const before = JSON.stringify(song);
+  const applied = applySongRevisions(song);
+  undoStack.length = 0; redoStack.length = 0;
+  if (applied.length && loadSaved()) undoStack.push(before);
+  if (!song.sections.some((s) => s.id === ui.section)) ui.section = song.sections[2]?.id ?? song.sections[0].id;
+  if (!song.tracks.some((t) => t.id === ui.track)) ui.track = song.tracks[0].id;
+  for (const k of Object.keys(lastPart)) delete lastPart[k];
+  sendSong(); seek(0); saveNow();
+  renderAll(); updateUndo();
+  toast(applied.length ? `${song.title}: updated (${applied.join('; ')})` : `Now editing ${song.title}`);
+}
+/** This song's chord vocabulary (the first song's saved copies have none). */
+const chordSet = () => song.chordSet ?? CHORDS;
 
 /** Make an edit: snapshot for undo, apply, push to the engine, redraw. */
 function commit(fn, { redraw = 'all', quiet = false } = {}) {
@@ -407,14 +436,16 @@ const ROWS = {
   toms: [['Ab2', 44], ['F2', 41], ['Eb2', 39], ['C2', 36]],
   sub: [['Root', 'R']],
   hats: [['Open', 1], ['Pedal', 2], ['Closed', 0]],
-  perc: [['Clap', 0], ['Snare', 6], ['Rim', 1], ['Shaker', 2], ['Conga', 3], ['Bell', 4], ['Glitch', 5]],
+  perc: [['Clap', 0], ['Snare', 6], ['Rim', 1], ['Shaker', 2], ['Conga', 3], ['Snap', 4], ['Glitch', 5]],
   stabs: [['Chord', 'C']],
   fx: [['Riser', 0], ['Down', 1], ['Wash', 2], ['Stutter', 3]],
 };
-const SCALE = [0, 2, 3, 5, 7, 8, 10].map((x) => (x + 5) % 12); // F minor
+const PC = { C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11 };
+/** Pitch classes of the song's scale (natural minor unless the song says). */
+const scale = () => (song.scaleSteps ?? [0, 2, 3, 5, 7, 8, 10]).map((x) => (x + (PC[song.key] ?? 5)) % 12);
 function rowsFor(tid) {
-  if (tid === 'lead') { const r = []; for (let n = 84; n >= 55; n--) r.push([noteName(n), n]); return r; }
-  return ROWS[tid] ?? [];
+  if (tid === 'lead') { const [lo, hi] = song.leadRange ?? [55, 84]; const r = []; for (let n = hi; n >= lo; n--) r.push([noteName(n), n]); return r; }
+  return song.rows?.[tid] ?? ROWS[tid] ?? [];
 }
 function defaultVel(tid, n) {
   const tok = Object.values(TOKENS[tid] ?? {}).find((t) => t[0] === n);
@@ -444,7 +475,7 @@ function renderEditor() {
   } }, el('option', { value: '__off' }, 'Off'), ...parts.map((p) => el('option', { value: p }, `Part ${p}`)), el('option', { value: '__copy' }, 'New part (copy of this one)'));
   partSel.value = cell ? cell.part : '__off';
   const usedIn = cell ? song.sections.filter((s) => song.arrangement[track.id][s.id]?.part === cell.part).map((s) => s.name) : [];
-  tools.replaceChildren(partSel, cell && usedIn.length > 1 ? el('span', { class: 'sub' }, `Part ${cell.part} also plays in ${usedIn.filter((n) => n !== sec.name).join(', ')}`) : null);
+  tools.replaceChildren(partSel, ...(cell && usedIn.length > 1 ? [el('span', { class: 'sub' }, `Part ${cell.part} also plays in ${usedIn.filter((n) => n !== sec.name).join(', ')}`)] : []));
   if (!cell) { body.replaceChildren(el('p', { class: 'hint' }, `${track.name} is off in the ${sec.name}. Pick a part above to switch it on.`)); return; }
   const part = song.parts[track.id][cell.part];
   const blocks = [];
@@ -461,8 +492,9 @@ function roll(track, part) {
   const draw = () => {
     const c = cv.getContext('2d'); const dpr = window.devicePixelRatio || 1;
     c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+    const sc = scale();
     rows.forEach(([label, n], i) => {
-      const inKey = track.id !== 'lead' || SCALE.includes(n % 12);
+      const inKey = track.id !== 'lead' || sc.includes(n % 12);
       c.fillStyle = inKey ? css('--inset') : '#151515'; c.fillRect(lw, i * rh, w - lw, rh);
       c.fillStyle = css('--label'); c.font = '11px system-ui'; c.fillText(label, 4, i * rh + rh * 0.7);
     });
@@ -498,15 +530,15 @@ function roll(track, part) {
 }
 function chordEditor(sec) {
   const prog = song.chords[sec.id] ?? (song.chords[sec.id] = []);
-  const names = Object.keys(CHORDS);
+  const set = chordSet(), names = Object.keys(set);
   const items = prog.map((c, i) => el('div', { class: 'chord' },
-    (() => { const s = el('select', { 'aria-label': 'Chord', onchange: (e) => commit(() => { c.name = e.target.value; c.notes = [...CHORDS[c.name]]; }) }, ...names.map((n) => el('option', { value: n }, n))); s.value = c.name; return s; })(),
+    (() => { const s = el('select', { 'aria-label': 'Chord', onchange: (e) => commit(() => { c.name = e.target.value; c.notes = [...set[c.name]]; }) }, ...names.map((n) => el('option', { value: n }, n))); s.value = c.name; return s; })(),
     el('input', { type: 'number', min: 1, max: 16, value: c.bars, 'aria-label': 'Bars', title: 'bars', onchange: (e) => commit(() => { c.bars = clamp(Math.round(Number(e.target.value) || 1), 1, 16); }) }),
     el('span', { class: 'sub' }, 'bars'),
     el('button', { class: 'btn small', title: 'Remove chord', onclick: () => { if (prog.length > 1) commit(() => prog.splice(i, 1)); } }, '×')));
   return el('div', {},
     el('h2', { style: 'margin-top:12px' }, `Chords in the ${sec.name}`),
-    el('div', { class: 'chords' }, ...items, el('button', { class: 'btn small', onclick: () => commit(() => prog.push({ bars: 4, name: 'Fm9', notes: [...CHORDS.Fm9] })) }, '+ Chord')),
+    el('div', { class: 'chords' }, ...items, el('button', { class: 'btn small', onclick: () => commit(() => prog.push({ bars: 4, name: names[0], notes: [...set[names[0]]] })) }, '+ Chord')),
     el('p', { class: 'hint' }, 'Chords cycle through the section. Stabs, pads, sub stabs and the lead all follow them.'));
 }
 
@@ -644,6 +676,8 @@ function toast(msg) {
 }
 function renderAll() {
   $('#song-meta').textContent = `${song.bpm} BPM · ${song.key} ${song.scale} · ${songBars(song)} bars`;
+  const pick = $('#song-pick'); if (pick.value !== songId) pick.value = songId;
+  document.title = `${song.title} · One Song`;
   renderTabs(); renderRuler(); renderLabels(); renderMap(); drawCurve(); renderEditor(); renderParams(); updatePosition();
 }
 
@@ -658,14 +692,14 @@ document.addEventListener('click', (e) => { if (!e.target.closest('#menu, #btn-m
 $('#menu').addEventListener('click', (e) => {
   const act = e.target.dataset?.act;
   if (act === 'save') {
-    const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(song, null, 1)], { type: 'application/json' })), download: 'one-song.json' });
+    const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(song, null, 1)], { type: 'application/json' })), download: `${(song.title || 'song').replace(/[^\w-]+/g, '-').toLowerCase()}.json` });
     document.body.append(a); a.click(); a.remove();
   }
-  if (act === 'reset') commit((s) => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, buildSong()); applyRevisions(s); });
+  if (act === 'reset') commit((s) => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, songDef(songId).build()); applySongRevisions(s); });
 });
 $('#file-load').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  try { const s = JSON.parse(await f.text()); if (!s.sections) throw new Error('not a song file'); commit((cur) => { Object.keys(cur).forEach((k) => delete cur[k]); Object.assign(cur, s); }); toast('Song loaded'); }
+  try { const s = JSON.parse(await f.text()); if (!s.sections) throw new Error('not a song file'); if (songIdOf(s) !== songId) throw new Error(`that file is for ${songDef(songIdOf(s)).title}; switch to it first`); commit((cur) => { Object.keys(cur).forEach((k) => delete cur[k]); Object.assign(cur, s); }); toast('Song loaded'); }
   catch (err) { toast(`Could not load: ${err.message}`); }
   e.target.value = '';
 });
@@ -677,6 +711,8 @@ document.addEventListener('keydown', (e) => {
 });
 window.addEventListener('resize', () => { drawCurve(); drawXY(); });
 
+$('#song-pick').replaceChildren(...SONGS.map((s) => el('option', { value: s.id }, `${s.title} · ${s.blurb}`)));
+$('#song-pick').addEventListener('change', (e) => switchSong(e.target.value));
 setupCurve();
 setupPerf();
 renderAll();
