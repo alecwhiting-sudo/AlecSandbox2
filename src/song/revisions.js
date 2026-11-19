@@ -4,7 +4,7 @@
 // hasn't had yet, so your own tweaks are kept. Add new revisions at the end.
 
 import { applyOps } from '../ui/ask.js';
-import { laneEvents } from './song.js';
+import { laneEvents, buildSong } from './song.js';
 
 // Bars/steps: the intro is bars 0-31 (steps 0-511); the build starts at bar 32.
 const roll = [];
@@ -207,9 +207,31 @@ export function applyRevisions(song) {
   const applied = [];
   for (const r of REVISIONS) {
     if (song.revisions.includes(r.id)) continue;
-    applyOps(song, r.ops);
+    if (r.ops) applyOps(song, r.ops);
+    if (r.apply) r.apply(song);
     song.revisions.push(r.id);
     applied.push(r.summary);
   }
   return applied;
 }
+
+// The percussion sequence as Claude last wrote it (base song + every revision
+// before `upto`), ignoring any edits made in the app.
+function referencePerc(upto) {
+  const ref = buildSong();
+  for (const r of REVISIONS) {
+    if (r.id === upto) break;
+    if (r.ops) applyOps(ref, r.ops);
+    if (r.apply) r.apply(ref);
+  }
+  return { parts: ref.parts.perc, arrangement: ref.arrangement.perc };
+}
+REVISIONS.push({
+  id: 'r3-perc-restore',
+  summary: 'Percussion sequence put back to how it was before your edits (the bell is now a short snap instead of a ring)',
+  apply(song) {
+    const ref = referencePerc('r3-perc-restore');
+    song.parts.perc = structuredClone(ref.parts);
+    song.arrangement.perc = structuredClone(ref.arrangement);
+  },
+});

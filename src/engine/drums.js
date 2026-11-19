@@ -162,7 +162,9 @@ class PercVoice {
       case 1: set(3200 * (p.rimTone ?? 1), 0.7); this.k = expK(0.011, sr); this.pk = expK(0.004, sr); this.pe = 1; break;
       case 2: set(9000, 1); this.k = expK(0.05, sr); break;                                    // shaker
       case 3: this.k = expK(0.16, sr); this.pk = expK(0.03, sr); this.pe = 1; break;           // conga
-      case 4: set(2400, 3); this.k = expK(0.09, sr); break;                                    // bell
+      // "bell" slot (note 4): now a short snap. Noise through a broad band with a
+      // faint metallic edge that dies in ~6 ms, so it doesn't ring against the lead.
+      case 4: set(3000, 1.3); this.k = expK(0.026, sr); this.pk = expK(0.006, sr); this.pe = 1; break;
       case 5: set(400 + this.rng.next() * 6000, 6); this.k = expK(0.02 + this.rng.next() * 0.06, sr); this.crush = 2 + Math.floor(this.rng.next() * 30); this.hold = 0; break; // glitch
       case 6: set(1800, 0.9); this.k = expK(0.12, sr); this.pk = expK(0.02, sr); this.pe = 1; break; // snare
       default: this.amp = 0;
@@ -191,7 +193,9 @@ class PercVoice {
       }
       case 4: {
         this.ph += 540 / sr; this.ph2 += 800 / sr; this.ph %= 1; this.ph2 %= 1;
-        this.f.tick((this.ph < 0.5 ? 0.5 : -0.5) + (this.ph2 < 0.5 ? 0.5 : -0.5)); y = this.f.band * 1.6; break;
+        const tone = ((this.ph < 0.5 ? 0.5 : -0.5) + (this.ph2 < 0.5 ? 0.5 : -0.5)) * this.pe * 0.3;
+        this.f.tick(rng.bipolar() * (this.t < sr * 0.001 ? 1 : 0.6) + tone); y = this.f.band * 2.3;
+        this.pe *= this.pk; break;
       }
       case 5: {
         if (this.t % this.crush === 0) this.hold = rng.bipolar();
