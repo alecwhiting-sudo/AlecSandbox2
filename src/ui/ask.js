@@ -111,10 +111,23 @@ export function applyOps(song, ops) {
             const s = Math.round(Number(a.s));
             if (!(s >= 0 && s < part.len)) continue;
             const v = clamp(Number(a.v ?? 0.75), 0.1, 1);
-            part.events.push({ s, n: a.n, v, l: clamp(Math.round(Number(a.l ?? 1)), 1, part.len), p: clamp(Number(a.p ?? 1), 0, 1), r: autoRank(s, v) });
+            part.events.push({ s, n: a.n, v, l: clamp(Math.round(Number(a.l ?? 1)), 1, part.len), p: clamp(Number(a.p ?? 1), 0, 1), r: a.r != null ? clamp(Number(a.r), 0, 1) : autoRank(s, v) });
           }
           part.events.sort((a, b) => a.s - b.s);
           done.push(`${o.track} part ${o.part}: ${part.events.length} hits`);
+          break;
+        }
+        case 'newpart': {
+          // {op:'newpart', track, part, len, tile?: PART_ID, removeRange?: [from, to], add?: [...]}
+          if (!song.parts[o.track]) { skip(o, 'unknown track'); break; }
+          const len = clamp(Math.round(Number(o.len ?? 16)), 1, 1024);
+          let events = [];
+          const src = o.tile ? song.parts[o.track][o.tile] : null;
+          if (src && !src.follow) for (let off = 0; off < len; off += src.len) for (const e of src.events) if (off + e.s < len) events.push({ ...e, s: off + e.s });
+          if (o.removeRange) events = events.filter((e) => e.s < o.removeRange[0] || e.s >= o.removeRange[1]);
+          song.parts[o.track][o.part] = { len, follow: null, events };
+          done.push(`${o.track}: new part ${o.part} (${len / 16} bars)`);
+          if (o.add) applyOps(song, [{ op: 'notes', track: o.track, part: o.part, add: o.add }]);
           break;
         }
         default: skip(o, 'unknown operation');

@@ -8,6 +8,7 @@ import { PRESETS, presetPatch } from '../stab/presets.js';
 import { noteName } from '../stab/theory.js';
 import { encodeWav } from '../engine/wav.js';
 import { setupAsk } from './ask.js';
+import { applyRevisions } from '../song/revisions.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, attrs = {}, ...kids) => {
@@ -27,6 +28,9 @@ const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n
 // ---------------------------------------------------------------- state
 const STORE = 'onesong.song.v1';
 let song = loadSaved() ?? buildSong();
+// Bring in song changes made by Claude in chat, keeping your own edits.
+const startUndo = JSON.stringify(song);
+const revised = applyRevisions(song);
 const ui = { track: 'toms', section: 'groove', master: false, curve: 'energy', bar: 0, playing: false };
 const perf = { energy: 0, density: 0, swing: 0, filter: 0, wash: 0, mute: {}, solo: {} };
 const undoStack = [], redoStack = [];
@@ -645,7 +649,7 @@ $('#menu').addEventListener('click', (e) => {
     const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(song, null, 1)], { type: 'application/json' })), download: 'one-song.json' });
     document.body.append(a); a.click(); a.remove();
   }
-  if (act === 'reset') commit((s) => { Object.assign(s, buildSong()); });
+  if (act === 'reset') commit((s) => { for (const k of Object.keys(s)) delete s[k]; Object.assign(s, buildSong()); applyRevisions(s); });
 });
 $('#file-load').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return;
@@ -665,5 +669,10 @@ setupCurve();
 setupPerf();
 renderAll();
 drawXY();
+if (revised.length) {
+  if (loadSaved()) undoStack.push(startUndo); // Undo reverts the update on an edited copy
+  save();
+  toast(`Song updated: ${revised.join('; ')}`);
+}
 updateUndo();
 setupAsk({ getSong: () => song, commit, toast, undo });

@@ -93,3 +93,37 @@ test('solo: only soloed tracks are heard', () => {
   assert.ok(soloed.toms > 0 && soloed.pads > 0);
   for (const id of ['kick', 'hats', 'perc', 'sub', 'stabs', 'lead']) assert.equal(soloed[id], 0, id);
 });
+
+test('revision r1: livelier intro with anticipation into the build', async () => {
+  const { applyRevisions } = await import('../src/song/revisions.js');
+  const { applyOps } = await import('../src/ui/ask.js');
+  const s = buildSong();
+  const applied = applyRevisions(s);
+  assert.equal(applied.length >= 1, true);
+  assert.deepEqual(applyRevisions(s), [], 'applied once only');
+  assert.equal(s.arrangement.stabs.intro.part, 'INTRO');
+  // Kick: four to the floor except the intro's last bar.
+  const kick = s.parts.kick.INTRO.events;
+  assert.ok(kick.some((e) => e.s === 480) && !kick.some((e) => e.s >= 496));
+  // Render: last intro bar has no kick, a snare roll, and the riser.
+  const e = new Engine(s, SR); e.seek(24); // where the riser starts
+  const kickHits = [];
+  const fire = e.fire.bind(e);
+  e.fire = (ev) => { if (e.tracks[ev.ti].id === 'kick') kickHits.push(ev.at); fire(ev); };
+  const n = Math.round(8 * 16 * e.stepLen), bar = Math.round(16 * e.stepLen);
+  const st = { kick: [new Float32Array(n), new Float32Array(n)], perc: [new Float32Array(n), new Float32Array(n)], fx: [new Float32Array(n), new Float32Array(n)] };
+  e.render(new Float32Array(n), new Float32Array(n), n, 0, st);
+  const pk = (a) => a.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  const last = (a) => a.subarray(n - bar + Math.round(0.8 * SR)); // after the previous kick has rung out
+  const lastBarStart = Math.round(31 * 16 * e.stepLen);
+  assert.ok(kickHits.length > 20, 'kick plays before');
+  assert.equal(kickHits.filter((t) => t >= lastBarStart).length, 0, 'no kick in the last intro bar');
+  assert.ok(pk(last(st.perc[0])) > 0.05, 'snare roll');
+  assert.ok(pk(last(st.fx[0])) > pk(st.fx[0].subarray(0, bar)) * 3, 'riser grows');
+  // A user's edited copy keeps its edits when the revision lands.
+  const mine = buildSong();
+  applyOps(mine, [{ op: 'energy', track: 'toms', section: 'intro', value: 1.1 }]);
+  applyRevisions(mine);
+  assert.equal(mine.arrangement.toms.intro.energy, 1.1);
+  assert.equal(mine.arrangement.stabs.intro.part, 'INTRO');
+});

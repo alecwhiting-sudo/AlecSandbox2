@@ -4,6 +4,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { buildSong } from '../src/song/song.js';
+import { applyRevisions } from '../src/song/revisions.js';
 import { Engine } from '../src/engine/engine.js';
 import { encodeWav } from '../src/engine/wav.js';
 
@@ -13,6 +14,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, arr) =>
 }, []));
 const sr = Number(args.sr ?? 48000);
 const song = buildSong();
+applyRevisions(song);
 const eng = new Engine(song, sr);
 const from = Number(args.from ?? 0);
 const bars = Number(args.bars ?? eng.totalBars - from);
