@@ -209,57 +209,74 @@ function parseClause(t, song) {
 }
 
 // ---------------------------------------------------------------- UI
-export function setupAsk({ getSong, commit, toast }) {
+const SIMPLE_HELP = 'Simple mode understands a track (kick, toms, sub, hats, perc, stabs, pads, lead, fx) and a section (intro, build, groove, breakdown, drop, peak, outro) with: busier / sparser, louder / quieter, darker / brighter, wetter / drier, pumpier, mute — and “60% swing in the groove”. Separate several requests with commas.';
+
+export function setupAsk({ getSong, commit, toast, undo }) {
   const form = document.querySelector('#ask-form');
   const input = document.querySelector('#ask-input');
   const out = document.querySelector('#ask-result');
   const go = document.querySelector('#ask-go');
-  let sampler = null, ctl = null;
+  const mode = document.querySelector('#ask-mode');
   const inArtifact = !!(window.claude && typeof window.claude.use === 'function');
-  if (inArtifact) window.claude.use('sample').then((s) => { sampler = s; }).catch(() => {});
+  // Resolves to the Claude function, or null (not in claude.ai, or unavailable).
+  // A request made before it settles waits for it instead of falling back.
+  let samplerReady = inArtifact ? window.claude.use('sample').catch(() => null) : Promise.resolve(null);
+  let ctl = null;
+
+  const setMode = (s) => {
+    mode.textContent = s
+      ? 'Claude reads your request and changes the song. Undo reverses it.'
+      : `${inArtifact ? 'Claude isn’t available here, so this is' : 'This is'} simple mode. ${SIMPLE_HELP} For anything else, use the claude.ai version.`;
+  };
+  mode.textContent = inArtifact ? 'Connecting to Claude…' : '';
+  samplerReady.then(setMode);
 
   const show = (...nodes) => { out.replaceChildren(...nodes); out.hidden = false; };
   const p = (text, cls) => { const e = document.createElement('p'); e.style.margin = '0'; if (cls) e.className = cls; e.textContent = text; return e; };
   const btn = (label, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = `btn small ${cls}`; b.textContent = label; b.onclick = fn; return b; };
 
-  function preview(summary, ops) {
-    // Dry run on a copy to list what would change.
+  // Apply straight away (one undo step) and show what changed.
+  function applyNow(summary, ops, request) {
     const copy = JSON.parse(JSON.stringify(getSong()));
     const lines = applyOps(copy, ops);
-    if (!lines.length) { show(p("I couldn't turn that into a change. Try naming a track (toms, hats, pads…) and a section (build, drop…).", 'sub')); return; }
+    const real = lines.filter((l) => !l.startsWith('Skipped'));
+    if (!real.length) {
+      show(p(`I couldn’t turn “${request}” into a change.`), p(SIMPLE_HELP, 'sub'));
+      return;
+    }
+    commit((s) => applyOps(s, ops));
     const ul = document.createElement('ul');
     for (const l of lines) { const li = document.createElement('li'); li.textContent = l; ul.append(li); }
     const row = document.createElement('div'); row.className = 'row gap';
-    row.append(
-      btn('Apply', 'primary', () => { commit((s) => applyOps(s, ops)); out.hidden = true; input.value = ''; toast('Applied. Undo is in the top bar.'); }),
-      btn('Discard', '', () => { out.hidden = true; }),
-    );
-    show(p(summary || 'Proposed changes:'), ul, row);
+    row.append(btn('Undo', '', () => { undo(); out.hidden = true; toast('Undone'); }), btn('OK', '', () => { out.hidden = true; }));
+    show(p(`Done: ${summary || 'changed the song'}`), ul, row);
+    input.value = '';
   }
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
-    if (!sampler) {
-      const ops = parseSimple(text, getSong());
-      preview(ops.length ? 'Proposed changes (simple mode: open this in claude.ai for full language understanding):' : '', ops);
-      return;
-    }
-    ctl?.abort(); ctl = new AbortController();
+    if (!text) { input.focus(); return; }
     go.disabled = true;
-    show(p('Thinking…', 'sub'), btn('Stop', '', () => ctl.abort()));
     try {
-      const res = await sampler.json(buildPrompt(getSong(), text), { signal: ctl.signal, cache: false });
-      if (!res || !Array.isArray(res.ops)) throw { code: 'invalid_json' };
-      preview(res.summary, res.ops);
-    } catch (err) {
-      const code = err?.code;
-      if (code === 'cancelled') out.hidden = true;
-      else if (code === 'not_granted' || code === 'sampling_disabled' || code === 'not_declared') { sampler = null; preview('Claude isn’t available here, so using simple mode:', parseSimple(text, getSong())); }
-      else if (code === 'rate_limited') show(p('Too many requests just now. Try again in a minute.', 'sub'));
-      else if (code === 'invalid_json') show(p('The answer came back garbled. Try again, or phrase it more simply.', 'sub'));
-      else show(p('Something went wrong reaching Claude. Try again.', 'sub'));
+      const sampler = await samplerReady;
+      if (!sampler) { applyNow('', parseSimple(text, getSong()), text); return; }
+      ctl?.abort(); ctl = new AbortController();
+      show(p('Thinking… (this can take up to a minute)', 'sub'), btn('Stop', '', () => ctl.abort()));
+      try {
+        const res = await sampler.json(buildPrompt(getSong(), text), { signal: ctl.signal, cache: false });
+        if (!res || !Array.isArray(res.ops)) throw { code: 'invalid_json' };
+        applyNow(res.summary, res.ops, text);
+      } catch (err) {
+        const code = err?.code;
+        if (code === 'cancelled') out.hidden = true;
+        else if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(code)) {
+          samplerReady = Promise.resolve(null); setMode(null);
+          applyNow('', parseSimple(text, getSong()), text);
+        } else if (code === 'rate_limited') show(p('Too many requests just now. Try again in a minute.', 'sub'));
+        else if (code === 'invalid_json') show(p('The answer came back garbled. Try again, or phrase it more simply.', 'sub'));
+        else show(p('Something went wrong reaching Claude. Try again.', 'sub'));
+      }
     } finally { go.disabled = false; }
   });
 }

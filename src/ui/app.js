@@ -659,4 +659,4 @@ setupPerf();
 renderAll();
 drawXY();
 updateUndo();
-setupAsk({ getSong: () => song, commit, toast });
+setupAsk({ getSong: () => song, commit, toast, undo });
