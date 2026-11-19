@@ -677,6 +677,7 @@ function toast(msg) {
 function renderAll() {
   $('#song-meta').textContent = `${song.bpm} BPM · ${song.key} ${song.scale} · ${songBars(song)} bars`;
   const pick = $('#song-pick'); if (pick.value !== songId) pick.value = songId;
+  $('#menu-songs').replaceChildren(...SONGS.map((s) => el('button', { 'data-song': s.id, class: s.id === songId ? 'current' : '' }, `${s.id === songId ? '✓ ' : ''}${s.title} (${s.blurb})`)), el('hr'));
   document.title = `${song.title} · One Song`;
   renderTabs(); renderRuler(); renderLabels(); renderMap(); drawCurve(); renderEditor(); renderParams(); updatePosition();
 }
@@ -690,6 +691,8 @@ $('#btn-export').addEventListener('click', exportSong);
 $('#btn-menu').addEventListener('click', () => { $('#menu').hidden = !$('#menu').hidden; });
 document.addEventListener('click', (e) => { if (!e.target.closest('#menu, #btn-menu')) $('#menu').hidden = true; });
 $('#menu').addEventListener('click', (e) => {
+  const sid = e.target.closest('[data-song]')?.dataset.song;
+  if (sid) { $('#menu').hidden = true; switchSong(sid); return; }
   const act = e.target.dataset?.act;
   if (act === 'save') {
     const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(song, null, 1)], { type: 'application/json' })), download: `${(song.title || 'song').replace(/[^\w-]+/g, '-').toLowerCase()}.json` });
