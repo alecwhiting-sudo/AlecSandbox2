@@ -160,7 +160,7 @@ const CURVES = {
 };
 
 // ---------------------------------------------------------------- compile
-function laneEvents(trackId, part) {
+export function laneEvents(trackId, part) {
   const map = TOKENS[trackId] ?? {};
   const events = [];
   for (const lane of part.lanes ?? []) {

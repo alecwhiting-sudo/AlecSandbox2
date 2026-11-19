@@ -158,7 +158,10 @@ export class Engine {
       live.pan = mix.pan ?? 0;
       // How much the low-pass follows energy and the song filter curve (hats barely, pads fully).
       const ff = mix.filterFollow ?? 1;
-      live.lp = clamp(mix.lp * Math.pow(filt, ff) * Math.pow(2, (e - 1) * 2.2 * ff), 80, 19000);
+      // Per-track filter curve ("lp:<track>"): sweeps for drama, 1 = as set.
+      const tcurve = song.curves[`lp:${track.id}`];
+      const tf = tcurve ? clamp(curveAt(tcurve, bar), 0.02, 1.6) : 1;
+      live.lp = clamp(mix.lp * tf * Math.pow(filt, ff) * Math.pow(2, (e - 1) * 2.2 * ff), 60, 19000);
       live.hp = mix.hp ?? 20;
       live.delay = (mix.delay ?? 0) * this.wet;
       live.reverb = (mix.reverb ?? 0) * this.wet;
@@ -167,8 +170,14 @@ export class Engine {
       live.duckK = Math.exp(-1 / ((mix.duckRelease ?? 0.12) * this.sr));
       if (!cell) continue;
 
-      const part = song.parts[track.id]?.[cell.part];
+      let part = song.parts[track.id]?.[cell.part];
       if (!part) continue;
+      // Phrase fills: the last bar of every N-bar phrase plays the fill part.
+      let fillBar = false;
+      if (part.fill && part.fillEvery && where.barInSection % part.fillEvery === part.fillEvery - 1) {
+        const fp = song.parts[track.id]?.[part.fill];
+        if (fp && !fp.follow) { part = fp; fillBar = true; }
+      }
       const chord = chordAt(song, where.section.id, where.barInSection);
 
       // Pads: one long chord per chord change.
@@ -186,7 +195,7 @@ export class Engine {
 
       // Density: the cell sets the baseline, the song's energy curve lifts it.
       const density = clamp(0.2 + cellE * (0.7 + 0.3 * eg) + this.perf.density, 0, 1);
-      const idx = (where.barInSection * STEPS_PER_BAR + stepInBar) % part.len;
+      const idx = fillBar ? stepInBar % part.len : (where.barInSection * STEPS_PER_BAR + stepInBar) % part.len;
       const swingDelay = idx % 2 === 1 ? (swing - 0.5) * 2 * this.stepLen : 0;
       for (const ev of part.events) {
         if (ev.s !== idx) continue;

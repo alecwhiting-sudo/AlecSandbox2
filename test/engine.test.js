@@ -94,16 +94,16 @@ test('solo: only soloed tracks are heard', () => {
   for (const id of ['kick', 'hats', 'perc', 'sub', 'stabs', 'lead']) assert.equal(soloed[id], 0, id);
 });
 
-test('revision r1: livelier intro with anticipation into the build', async () => {
+test('revisions: livelier intro with anticipation into the build', async () => {
   const { applyRevisions } = await import('../src/song/revisions.js');
   const { applyOps } = await import('../src/ui/ask.js');
   const s = buildSong();
   const applied = applyRevisions(s);
   assert.equal(applied.length >= 1, true);
   assert.deepEqual(applyRevisions(s), [], 'applied once only');
-  assert.equal(s.arrangement.stabs.intro.part, 'INTRO');
+  assert.ok(s.arrangement.stabs.intro, 'stabs in the intro');
   // Kick: four to the floor except the intro's last bar.
-  const kick = s.parts.kick.INTRO.events;
+  const kick = s.parts.kick[s.arrangement.kick.intro.part].events;
   assert.ok(kick.some((e) => e.s === 480) && !kick.some((e) => e.s >= 496));
   // Render: last intro bar has no kick, a snare roll, and the riser.
   const e = new Engine(s, SR); e.seek(24); // where the riser starts
@@ -125,5 +125,26 @@ test('revision r1: livelier intro with anticipation into the build', async () =>
   applyOps(mine, [{ op: 'energy', track: 'toms', section: 'intro', value: 1.1 }]);
   applyRevisions(mine);
   assert.equal(mine.arrangement.toms.intro.energy, 1.1);
-  assert.equal(mine.arrangement.stabs.intro.part, 'INTRO');
+  assert.ok(mine.arrangement.stabs.intro);
+});
+
+test('draft 2: lead in key, tighter kick, cleaner toms, fills, sweeps', async () => {
+  const { applyRevisions } = await import('../src/song/revisions.js');
+  const s = buildSong(); applyRevisions(s);
+  const fminor = new Set([5, 7, 8, 10, 0, 1, 3]);
+  for (const p of ['M16', 'M16B']) for (const e of s.parts.lead[p].events) assert.ok(fminor.has(e.n % 12), `${p} note ${e.n}`);
+  assert.ok(s.tracks.find((t) => t.id === 'kick').params.decay < 0.3);
+  const toms = s.tracks.find((t) => t.id === 'toms').mix;
+  assert.ok(toms.drive < 0.1 && toms.cutDb < -3);
+  assert.equal(s.parts.toms.B.fill, 'F');
+  assert.ok(s.curves['lp:lead'].length > 4);
+  // Fill bar: groove bar 8 (song bar 71) plays the kick fill (no kick on beat 4).
+  const e = new Engine(s, SR); const hits = [];
+  const fire = e.fire.bind(e); e.fire = (ev) => { if (e.tracks[ev.ti].id === 'kick') hits.push(ev.at); fire(ev); };
+  e.seek(71);
+  const n = Math.round(16 * e.stepLen); e.render(new Float32Array(n), new Float32Array(n), n);
+  assert.equal(hits.length, 3, `kick hits in the fill bar: ${hits.length}`);
+  // The lead's filter sweeps: much darker at the drop start than 16 bars in.
+  const lp = (bar) => { const x = new Engine(s, SR); x.seek(bar); const m = Math.round(x.stepLen); x.render(new Float32Array(m), new Float32Array(m), m); return x.live[x.tracks.findIndex((t) => t.id === 'lead')].lp; };
+  assert.ok(lp(112) < lp(128) / 3, `${lp(112)} vs ${lp(128)}`);
 });

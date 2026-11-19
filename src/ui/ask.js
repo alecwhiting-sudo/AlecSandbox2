@@ -8,9 +8,10 @@
 import { CHORDS } from '../song/song.js';
 import { autoRank } from '../song/song.js';
 import { PRESETS, presetPatch } from '../stab/presets.js';
+import { merge } from '../stab/patch.js';
 
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-const MIX_KEYS = { gain: [-30, 6], pan: [-1, 1], lp: [200, 19000], hp: [15, 2000], drive: [0, 1], delay: [0, 1], reverb: [0, 1], duck: [0, 1], duckRelease: [0.03, 0.6], filterFollow: [0, 1] };
+const MIX_KEYS = { gain: [-30, 6], pan: [-1, 1], lp: [200, 19000], hp: [15, 2000], res: [0, 0.9], drive: [0, 1], delay: [0, 1], reverb: [0, 1], duck: [0, 1], duckRelease: [0.03, 0.6], filterFollow: [0, 1], cutFreq: [60, 4000], cutDb: [-15, 6], cutQ: [0.3, 8] };
 const MASTER_KEYS = { glue: [0, 1], pump: [0, 0.8], pumpRelease: [0.05, 0.5], delayFeedback: [0, 0.9], delayGrit: [0, 1], reverbDecay: [0.5, 12], gainDb: [-12, 6] };
 const CURVE_RANGE = { energy: [0, 1.2], swing: [0.5, 0.75], filter: [0, 1.2], wet: [0, 2], glitch: [0, 1] };
 
@@ -83,8 +84,15 @@ export function applyOps(song, ops) {
           break;
         }
         case 'curve': {
-          const r = CURVE_RANGE[o.curve];
+          const isTrack = /^lp:/.test(o.curve ?? '') && song.tracks.some((t) => `lp:${t.id}` === o.curve);
+          const r = isTrack ? [0.02, 1.6] : CURVE_RANGE[o.curve];
           if (!r) { skip(o, 'unknown curve'); break; }
+          if (isTrack && !song.curves[o.curve]) song.curves[o.curve] = [];
+          if (o.points) { // replace a whole curve: [[bar, value], ...]
+            song.curves[o.curve] = o.points.map(([b, v]) => [Math.round(Number(b)), Math.round(clamp(Number(v), r[0], r[1]) * 100) / 100]).sort((a, b) => a[0] - b[0]);
+            done.push(`${o.curve} curve: ${song.curves[o.curve].length} points`);
+            break;
+          }
           const from = Math.round(Number(o.from ?? 0)), to = Math.round(Number(o.to ?? from));
           const v = Math.round(clamp(Number(o.value), r[0], r[1]) * 100) / 100;
           const pts = song.curves[o.curve].filter(([b]) => b < from || b > to);
@@ -115,6 +123,24 @@ export function applyOps(song, ops) {
           }
           part.events.sort((a, b) => a.s - b.s);
           done.push(`${o.track} part ${o.part}: ${part.events.length} hits`);
+          break;
+        }
+        case 'patch': {
+          // {op:'patch', track, preset?, over:{...}}: a Stab Lab sound with overrides.
+          const t = trackOf(song, o.track);
+          if (!t || t.instrument !== 'poly') { skip(o, 'not a synth track'); break; }
+          const base = o.preset ? presetPatch(o.preset) : t.params.patch;
+          t.params.patch = merge(base, o.over ?? {});
+          if (o.preset) t.params.preset = o.preset;
+          done.push(`${t.name}: new sound${o.preset ? ` (${o.preset})` : ''}`);
+          break;
+        }
+        case 'fill': {
+          // {op:'fill', track, part, fill: FILL_PART_ID|null, every: bars}
+          const part = song.parts[o.track]?.[o.part];
+          if (!part) { skip(o, 'unknown part'); break; }
+          part.fill = o.fill ?? null; part.fillEvery = o.fill ? clamp(Math.round(Number(o.every ?? 8)), 2, 32) : 0;
+          done.push(o.fill ? `${o.track} part ${o.part}: fill ${o.fill} every ${part.fillEvery} bars` : `${o.track} part ${o.part}: no fills`);
           break;
         }
         case 'newpart': {
@@ -158,12 +184,16 @@ Turn the producer's request into edit operations on the song below. Reply with O
 Operations (use only these; track/section/part ids exactly as in the song):
 - {"op":"energy","track":ID,"section":ID|"all","value":0..1.2} or "delta" instead of "value". Cell energy sets how busy (density), loud and open a part is. Busier/sparser = energy.
 - {"op":"part","track":ID,"section":ID,"part":PART_ID|null}  switch a part, or null = silent there.
-- {"op":"mix","track":ID,"key":K,"value":N} (or "delta", or "factor" to multiply). K: gain(dB -30..6), pan(-1..1), lp(Hz, darker=lower), hp(Hz), drive(0..1), delay(0..1 send), reverb(0..1 send), duck(0..1 sidechain depth), duckRelease(s), filterFollow(0..1).
+- {"op":"mix","track":ID,"key":K,"value":N} (or "delta", or "factor" to multiply). K: gain(dB -30..6), pan(-1..1), lp(Hz, darker=lower), hp(Hz), res(0..0.9 low-pass resonance), cutFreq(Hz)+cutDb(-15..6) a bell EQ e.g. remove low-mid mud, drive(0..1), delay(0..1 send), reverb(0..1 send), duck(0..1 sidechain depth), duckRelease(s), filterFollow(0..1).
 - {"op":"param","track":ID,"key":K,"value":N}  numeric sound params shown in tracks[].params.
 - {"op":"sound","track":"stabs"|"pads"|"lead","preset":PRESET_ID}
 - {"op":"master","key":K,"value":N}  K: glue, pump, pumpRelease, delayFeedback, delayGrit, reverbDecay, gainDb.
 - {"op":"curve","curve":"energy"|"swing"|"filter"|"wet"|"glitch","from":BAR,"to":BAR,"value":N}  bars are 0-based song bars (see sections' startBar). swing 0.5 straight..0.75 heavy; wet scales delay+reverb (1 normal).
+- {"op":"curve","curve":"lp:TRACK_ID","from":BAR,"to":BAR,"value":0.02..1.6} or "points":[[BAR,V],...]  a per-track filter sweep (multiplies that track's low-pass; 1 = as set). Use with mix "res" (resonance 0..0.9) for dramatic sweeps.
 - {"op":"chords","section":ID,"chords":[{"name":CHORD,"bars":N},...]}
+- {"op":"fill","track":ID,"part":PART_ID,"fill":FILL_PART_ID|null,"every":BARS}  the last bar of every N-bar phrase plays the fill part.
+- {"op":"newpart","track":ID,"part":NEW_ID,"len":STEPS,"tile":EXISTING_PART_ID?,"add":[events]}  create a part (optionally starting as copies of another), then use "part" to place it.
+- {"op":"patch","track":"stabs"|"pads"|"lead","preset":PRESET_ID?,"over":{...Stab Lab patch overrides, e.g. {"filterA":{"cutoff":600,"res":0.6,"env":3}}}}
 - {"op":"notes","track":ID,"part":PART_ID,"add":[{"s":STEP,"n":NOTE,"v":0..1,"l":LEN}],"remove":[{"s":STEP,"n":NOTE}],"clear":false}
   Steps are 16ths from the part start (0..len-1). Notes per track: kick n=null; toms 36 C2,39 Eb2,41 F2,44 Ab2; sub "R" (chord root); hats 0 closed,1 open,2 pedal; perc 0 clap,1 rim,2 shaker,3 conga,4 bell,5 glitch,6 snare; stabs "C" (current chord); lead MIDI 55..84 in F minor (F G Ab Bb C Db Eb, Gb as a b9 rub); fx 0 riser,1 downlifter,2 wash,3 stutter.
 Prefer small, musical edits. Keep it minor and a little discordant. Don't invent ids.`;

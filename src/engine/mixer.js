@@ -16,6 +16,14 @@ export class Channel {
     this.hp = [new SVFCore(), new SVFCore()];
     this.lp = [new SVFCore(), new SVFCore()];
     this.n = 0; this.lpCut = mix.lp ?? 18000; this.hpCut = mix.hp ?? 20;
+    // Optional bell cut/boost (e.g. take the fuzzy low-mids out of the toms).
+    this.cutDb = mix.cutDb ?? 0;
+    if (this.cutDb) {
+      this.bell = [new SVFCore(), new SVFCore()];
+      const k = 1 / clamp(mix.cutQ ?? 1.2, 0.3, 8);
+      for (const f of this.bell) f.set(prewarp(clamp(mix.cutFreq ?? 320, 40, 8000), sr), k);
+      this.bellK = k; this.bellG = dbToGain(this.cutDb) - 1;
+    }
     this.duckEnv = 0;
     this.out = [0, 0]; this.sendD = [0, 0]; this.sendR = [0, 0];
     this.setFilters(this.lpCut, this.hpCut);
@@ -35,7 +43,13 @@ export class Channel {
   process(l, r, live) {
     if (this.n++ % CTRL === 0 && (live.lp !== this.lpCut || live.hp !== this.hpCut)) this.setFilters(live.lp, live.hp);
     this.hp[0].tick(l); this.hp[1].tick(r);
-    this.lp[0].tick(this.hp[0].high); this.lp[1].tick(this.hp[1].high);
+    let x0 = this.hp[0].high, x1 = this.hp[1].high;
+    if (this.bell) {
+      // Normalised band-pass (peak 1) added back with gain: a peaking EQ.
+      this.bell[0].tick(x0); this.bell[1].tick(x1);
+      x0 += this.bellG * this.bellK * this.bell[0].band; x1 += this.bellG * this.bellK * this.bell[1].band;
+    }
+    this.lp[0].tick(x0); this.lp[1].tick(x1);
     let a = this.lp[0].low, b = this.lp[1].low;
     if (live.drive > 0) {
       const d = 1 + live.drive * 6, n = 1 / fastTanh(d);

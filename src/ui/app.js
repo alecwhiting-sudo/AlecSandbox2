@@ -199,7 +199,15 @@ const CURVES = {
   filter: { label: 'Filter', min: 0, max: 1.2 },
   wet: { label: 'Wash', min: 0, max: 2 },
   glitch: { label: 'Glitch', min: 0, max: 1 },
+  track: { label: 'Track filter', min: 0.02, max: 1.6 },
 };
+// The "Track filter" tab edits the selected track's own sweep curve.
+const curveKey = () => (ui.curve === 'track' ? `lp:${ui.track}` : ui.curve);
+function curvePoints() {
+  const k = curveKey();
+  if (!song.curves[k]) song.curves[k] = [[0, 1], [songBars(song), 1]];
+  return song.curves[k];
+}
 function renderTabs() {
   $('#curve-tabs').replaceChildren(...Object.entries(CURVES).map(([k, c]) =>
     el('button', { class: ui.curve === k ? 'on' : '', onclick: () => { ui.curve = k; renderTabs(); drawCurve(); } }, c.label)));
@@ -309,22 +317,23 @@ function drawCurve() {
   let start = 0;
   c.fillStyle = css('--line-light');
   for (const s of song.sections) { c.fillRect(g.x(start), 0, 1, g.h); start += s.bars; }
-  const pts = song.curves[ui.curve] ?? [];
+  const pts = curvePoints();
   c.strokeStyle = css('--accent'); c.lineWidth = 2; c.beginPath();
   pts.forEach(([b, v], i) => { const X = g.x(b), Y = g.y(v); if (i) c.lineTo(X, Y); else c.moveTo(X, Y); });
   c.stroke();
   c.fillStyle = '#fff';
   for (const [b, v] of pts) { c.beginPath(); c.arc(g.x(b), g.y(v), 3.5, 0, Math.PI * 2); c.fill(); }
   c.fillStyle = css('--muted'); c.font = '11px system-ui';
-  c.fillText(`${g.def.label}: drag points · click to add · double-click to remove`, 6, 14);
+  const name = ui.curve === 'track' ? `${song.tracks.find((t) => t.id === ui.track)?.name} filter (1 = as set)` : g.def.label;
+  c.fillText(`${name}: drag points · click to add · double-click to remove`, 6, 14);
 }
 function setCurvePoint(key, bar, v) {
-  const pts = song.curves[key];
+  const pts = song.curves[key] ?? (song.curves[key] = [[0, 1], [songBars(song), 1]]);
   const i = pts.findIndex(([b]) => b === bar);
   if (i >= 0) pts[i][1] = v; else { pts.push([bar, v]); pts.sort((a, b) => a[0] - b[0]); }
 }
 function nearestPoint(g, x, y) {
-  const pts = song.curves[ui.curve];
+  const pts = curvePoints();
   let best = -1, bd = 10;
   pts.forEach(([b, v], i) => { const d = Math.hypot(g.x(b) - x, g.y(v) - y); if (d < bd) { bd = d; best = i; } });
   return best;
@@ -336,13 +345,13 @@ function setupCurve() {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     let i = nearestPoint(g, x, y);
     undoStack.push(JSON.stringify(song)); redoStack.length = 0; updateUndo();
-    if (i < 0) { setCurvePoint(ui.curve, g.bar(x), Math.round(g.val(y) * 100) / 100); i = song.curves[ui.curve].findIndex(([b]) => b === g.bar(x)); changed('curve'); }
+    if (i < 0) { setCurvePoint(curveKey(), g.bar(x), Math.round(g.val(y) * 100) / 100); i = curvePoints().findIndex(([b]) => b === g.bar(x)); changed('curve'); }
     curveDrag = i; cv.setPointerCapture(e.pointerId);
   });
   cv.addEventListener('pointermove', (e) => {
     if (curveDrag == null || !cv.hasPointerCapture(e.pointerId)) return;
     const g = curveGeom(); const r = cv.getBoundingClientRect();
-    const pts = song.curves[ui.curve];
+    const pts = curvePoints();
     const lo = curveDrag > 0 ? pts[curveDrag - 1][0] : 0, hi = curveDrag < pts.length - 1 ? pts[curveDrag + 1][0] : g.total;
     pts[curveDrag] = [clamp(g.bar(e.clientX - r.left), lo, hi), Math.round(g.val(e.clientY - r.top) * 100) / 100];
     drawCurve(); sendSong();
@@ -351,7 +360,7 @@ function setupCurve() {
   cv.addEventListener('dblclick', (e) => {
     const g = curveGeom(); const r = cv.getBoundingClientRect();
     const i = nearestPoint(g, e.clientX - r.left, e.clientY - r.top);
-    if (i >= 0 && song.curves[ui.curve].length > 2) commit((s) => { s.curves[ui.curve].splice(i, 1); }, { redraw: 'curve' });
+    if (i >= 0 && curvePoints().length > 2) commit((s) => { s.curves[curveKey()].splice(i, 1); }, { redraw: 'curve' });
   });
 }
 
@@ -523,6 +532,9 @@ const MIX = [
   ['pan', 'Pan', -1, 1, 0.01],
   ['lp', 'Low-pass', 200, 19000, 1, (v) => `${Math.round(v)} Hz`, true],
   ['hp', 'High-pass', 15, 2000, 1, (v) => `${Math.round(v)} Hz`, true],
+  ['res', 'Resonance', 0, 0.9, 0.01],
+  ['cutFreq', 'EQ cut/boost at', 60, 4000, 1, (v) => `${Math.round(v)} Hz`, true],
+  ['cutDb', 'EQ amount', -15, 6, 0.5, (v) => `${v.toFixed(1)} dB`],
   ['drive', 'Drive', 0, 1, 0.01],
   ['delay', 'Delay send', 0, 1, 0.01],
   ['reverb', 'Reverb send', 0, 1, 0.01],
