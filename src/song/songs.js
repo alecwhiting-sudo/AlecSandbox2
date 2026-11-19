@@ -3,11 +3,13 @@
 
 import { buildSong } from './song.js';
 import { buildSong2 } from './song2.js';
+import { buildSong3 } from './song3.js';
 import { REVISIONS, applyRevisions } from './revisions.js';
 
 export const SONGS = [
   { id: 'one', title: 'Untitled Detroit', blurb: 'F minor', build: buildSong, revisions: REVISIONS },
   { id: 'undertow', title: 'Undertow', blurb: 'D minor, darker', build: buildSong2, revisions: [] },
+  { id: 'woodward', title: 'Woodward Swing', blurb: 'C Dorian, jazzy', build: buildSong3, revisions: [] },
 ];
 
 /** The first song's saved copies predate song ids. */

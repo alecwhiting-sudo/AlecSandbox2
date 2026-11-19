@@ -8,7 +8,7 @@ import { applyOps, parseSimple } from '../src/ui/ask.js';
 const SR = 24000;
 
 test('the song list has the first song and Undertow', () => {
-  assert.deepEqual(SONGS.map((s) => s.id), ['one', 'undertow']);
+  assert.deepEqual(SONGS.map((s) => s.id), ['one', 'undertow', 'woodward']);
   assert.equal(songIdOf({}), 'one'); // saved copies from before song ids
   assert.equal(songIdOf(buildSong2()), 'undertow');
   assert.equal(songDef('nope').id, 'one');
